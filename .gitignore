@@ -1,0 +1,10 @@
+.env
+.env.*
+*.secret
+CLAUDE.local.md
+secrets/
+venv/
+__pycache__/
+*.pyc
+logs/
+.DS_Store
