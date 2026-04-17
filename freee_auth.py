@@ -8,11 +8,12 @@ freee API OAuth2 トークン管理モジュール
 import logging
 import os
 import time
+from pathlib import Path
 
 import requests
 from dotenv import dotenv_values, set_key
 
-ENV_PATH = os.path.expanduser("~/law-secretary/.env")
+ENV_PATH = str(Path(__file__).resolve().parent / ".env")
 TOKEN_URL = "https://accounts.secure.freee.co.jp/public_api/token"
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,19 @@ def get_headers():
     }
 
 
-def get_company_id():
-    """事業所IDを返す。"""
+def get_company_id(business_type=None):
+    """事業所IDを返す。
+
+    Args:
+        business_type (str | None): "corporate" または "personal" を指定可能。
+    """
     env = _load_env()
+    if business_type == "corporate":
+        key = "FREEE_COMPANY_ID_CORPORATE"
+        if env.get(key):
+            return int(env[key])
+    elif business_type == "personal":
+        key = "FREEE_COMPANY_ID_PERSONAL"
+        if env.get(key):
+            return int(env[key])
     return int(env["FREEE_COMPANY_ID"])
