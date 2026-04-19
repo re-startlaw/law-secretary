@@ -8,3 +8,9 @@ __pycache__/
 *.pyc
 logs/
 .DS_Store
+
+# UTF-8 path blob for scripts/list_path_from_file.py (avoids Unicode-in-shell prompts)
+.cursor/shell_path_utf8.txt
+
+# Runtime log
+secretary.log

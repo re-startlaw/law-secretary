@@ -12,16 +12,19 @@
 
 ## freee請求書作成フロー
 1. 事業区分（法人/個人）を確認
-2. 取引先名・送信先メール・請求内容を確認
-3. 請求書を作成
-4. 送付済みに更新
-5. 相手へ送信
-6. 結果（請求書ID）を報告
+2. 取引先名・請求内容・金額・期日を確認
+3. 請求書freee API（`/iv/invoices`）で請求書を作成
+4. スクリプトが返すfreee UIのURLを米谷弁護士に報告
+5. 米谷弁護士がUIで「URL共有で送付」を1クリックして送付
+   （※ メール送信APIは請求書freeeに存在しないため自動化不可）
 
 ## 実行コマンド
 - 自然文起点: `venv/bin/python instruction_router.py "請求書を作成して"`
-- 直接起点:
-  `venv/bin/python freee_invoice.py create-and-send --business corporate --partner-name "取引先名" --partner-email "相手メール" --description "概要" --amount 55000 --issue-date 2026-04-17 --due-date 2026-04-30`
+- 直接起点（単一品目）:
+  `venv/bin/python freee_invoice.py create --business corporate --partner-name "取引先名" --title "件名" --amount 50000 --issue-date 2026-04-17 --due-date 2026-04-30`
+- 直接起点（複数品目）:
+  `venv/bin/python freee_invoice.py create --business corporate --partner-name "取引先名" --title "件名" --issue-date 2026-04-17 --due-date 2026-04-30 --items '[{"description":"項目A","amount":400000},{"description":"項目B","amount":100000}]'`
+- `--amount` と `--items` の金額はいずれも**税別**（`tax_entry_method=out`）
 
 ## freee経理連携
 - 実行: `venv/bin/python freee_sync.py`

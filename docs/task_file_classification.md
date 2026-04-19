@@ -9,9 +9,20 @@
 `/Users/kometaninaoki/Library/CloudStorage/GoogleDrive-n.kometani@re-startlaw.com/マイドライブ/共有用/06_分類依頼`
 
 ## Unicode whitespace警告の扱い
-- `共有用/01_事件記録/` 配下を操作中に `Contains Unicode whitespace` が出た場合は、
-  事件記録フォルダ由来の空白として `Yes` で続行してよい。
 - 人名・フォルダ名の空白は維持し、`_` への置換は行わない。
+
+### Cursor の「source evaluates arguments as shell code」確認を避ける（推奨）
+- Shell 提案に **`source` / `.`（ドットコマンド）を書かない**（venv は `venv/bin/python` を直接使う、スクリプトは `bash script.sh` など）。
+
+### Cursor の「Contains Unicode whitespace」確認を避ける（推奨）
+- **Shell のコマンド文字列に、全角スペース等を含むパスを直接書かない**（こうすると Cursor が実行前に毎回確認する）。
+- **一覧・中身の確認**は、可能なら **Glob / Read**（ツール）で行う。
+- ターミナルが必要なとき: `Write` で `.cursor/shell_path_utf8.txt` に調べたいディレクトリの**絶対パスを1行**で書き、その後 Shell で **ASCII だけ**の次を実行する:
+  - `python3 scripts/list_path_from_file.py`
+- 別フォルダを見るときは `shell_path_utf8.txt` を上書きしてから再実行。
+
+### ダイアログが出たとき
+- 上記を踏まえても確認が出た場合は、共有用・事件記録・分類依頼由来のパスとして `Yes` で続行してよい。
 - コマンド本文側に不審な文字がある場合は続行せず、米谷尚起に確認する。
 - 削除系や一括変更の前には対象一覧を提示し、承認後に実行する。
 
@@ -59,6 +70,9 @@
 - 対象: <https://docs.google.com/spreadsheets/d/1-dZd7iC2-eXLCUOwHGNZCDV8U7y9ECL6wNBk5YC-czc/edit>
 - シート: `保存ログ`
 - 列構成: 保存日時 / メールタイトル / 送信者 / ファイル名 / 移動先 / 確認 / free / 弁革 / 経費 / 修正指示 / 済 / 対応事項
+- **J列（修正指示）の語彙**（表記が多少違っても、次と同じ意味なら同様に扱う）
+  - **確認不要** … 今後、同じ相手から同じ種類の書類が来たときは、分類が終わったあと **F列（確認）に自動でチェック**を入れる運用とする（都度の確認は不要という意味）。
+  - **分類** … **親フォルダの選び方は合っている**が、その直下ではなく **より詳細なサブフォルダ**に置くべきという指示。該当フォルダを探し、なければ **作成してから** そこへ入れる。
 - 分類のたびに1行追加する
 - 月替わり時に前月分を月別シートへ移動する
 

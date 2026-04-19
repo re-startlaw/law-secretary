@@ -28,24 +28,24 @@ def _build_invoice_args_from_prompt() -> SimpleNamespace:
     print("請求書の作成に必要な情報を入力してください。")
     business = _prompt("事業区分 corporate/personal", "corporate")
     partner_name = _prompt("取引先名")
-    partner_email = _prompt("取引先メールアドレス")
     title = _prompt("請求書タイトル", "請求書")
-    description = _prompt("概要")
-    amount = float(_prompt("金額（円）", "0"))
+    description = _prompt("備考メモ", "")
+    amount = float(_prompt("金額（税別、円）", "0"))
     issue_date = _prompt("請求日 yyyy-mm-dd")
     due_date = _prompt("支払期日 yyyy-mm-dd")
-    account_item_id = int(_prompt("勘定科目ID", "27"))
 
     return SimpleNamespace(
         business=business,
         partner_name=partner_name,
-        partner_email=partner_email,
+        partner_title=None,
         title=title,
         description=description,
+        note="",
         amount=amount,
         issue_date=issue_date,
         due_date=due_date,
-        account_item_id=account_item_id,
+        template_id=None,
+        items=None,
     )
 
 
@@ -53,7 +53,7 @@ def handle_request(request_text: str) -> None:
     normalized = request_text.strip()
     if re.search(r"請求書.*(作成|作って|発行)", normalized):
         args = _build_invoice_args_from_prompt()
-        freee_invoice.cmd_create_and_send(args)
+        freee_invoice.create_invoice(args)
         return
     raise ValueError(
         "未対応の指示です。現在は『請求書を作成して』系の指示に対応しています。"

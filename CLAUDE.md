@@ -9,11 +9,12 @@
 - 事務員：佐藤信子（n.sato@re-startlaw.com）
 
 ## 役割
-法律事務所の秘書として、以下の4業務を扱う。
+法律事務所の秘書として、以下の5業務を扱う。
 - ファイル分類
 - メール作成
 - 請求書作成・経理処理
 - 法律書類作成
+- システム管理
 
 ## 仕事別ルールファイル
 依頼内容に応じて以下を参照する。
@@ -22,6 +23,7 @@
 - メール作成: `docs/task_mail.md`
 - 請求書作成・経理: `docs/task_invoice_accounting.md`
 - 法律書類作成: `docs/task_legal_docs.md`
+- システム管理: `docs/task_system_management.md`
 
 ## 依頼タグ運用
 ユーザー依頼の先頭にタグがある場合、優先して該当ファイルを読む。
@@ -30,6 +32,7 @@
 - `[メール]` → `docs/task_mail.md`
 - `[請求書]` / `[経理]` → `docs/task_invoice_accounting.md`
 - `[法律書類]` → `docs/task_legal_docs.md`
+- `[システム]` → `docs/task_system_management.md`
 
 タグがない場合は、依頼文から業務種別を判定して該当ファイルを読む。
 
@@ -39,14 +42,14 @@
 - 常に日本語で応答する
 - セキュリティルールを最優先する
 
-## 事件記録フォルダ運用（Unicode whitespace警告）
-- `/共有用/01_事件記録/` 配下のパス操作時に `Contains Unicode whitespace` が表示された場合、
-  事件記録フォルダ由来の空白として扱い、確認は `Yes` で続行してよい。
-- 人名・フォルダ名は現状維持し、空白を `_` へ置換しない。
-- ただし、コマンド本文（オプション・フラグ・記号列）に不審な文字がある場合は停止し、
-  米谷尚起へ確認する。
+## 事件記録フォルダ運用（Unicode whitespace・Cursor の確認ダイアログ）
+- **まず `Contains Unicode whitespace` が出ないようにする。** 原因は、Shell のコマンド行に全角スペース等を含むパスをそのまま書くこと。依頼者フォルダ名の空白は正しいので、**パスを `_` に置換しない。**
+- **Shell にフルパスを載せない:** 一覧・確認は Glob / Read を優先。ターミナルが必要なときは `docs/task_file_classification.md` の「Cursor の Unicode 確認を避ける」に従い、`.cursor/shell_path_utf8.txt` ＋ `python3 scripts/list_path_from_file.py` など **コマンド行が ASCII だけ**になる方法を使う。
+- **`source` / `.` を Shell 提案に書かない**（Cursor が `source' evaluates arguments as shell code` と止めることがある）。venv は `venv/bin/python`、スクリプトは `bash script.sh` で代替する。
+- それでもダイアログが出た場合のみ、事件記録・分類依頼由来のパスとして `Yes` でよい。
+- コマンド本文（オプション・フラグ・記号列）に不審な文字がある場合は停止し、米谷尚起へ確認する。
 - `rm`、上書きを伴う `mv`、一括変更の前には対象一覧を提示し、承認を得てから実行する。
-- 事件記録フォルダ外で同警告が出た場合は従来どおり確認を取る。
+- 事件記録・分類依頼以外のパスで同警告が出た場合は従来どおり確認を取る。
 
 ## セキュリティルール（変更・削除禁止）
 

@@ -1,0 +1,42 @@
+---
+description: Shell で Unicode 空白・source 警告を出さない（Cursor の実行前確認を減らす）
+alwaysApply: true
+---
+
+# ファイル分類・事件記録パスとシェル（重要）
+
+`共有用/01_事件記録/` や `06_分類依頼` など、**依頼者名に全角スペース（Unicode 空白）が含まれるパス**を、**Shell ツールのコマンド文字列にそのまま書かないこと**。Cursor が `Contains Unicode whitespace` で実行を止め、ユーザーに何度も確認が出る。
+
+## 次の順で使う
+
+1. **Glob / Read / SemanticSearch** で一覧・内容確認（シェルにフルパスを載せない）。
+2. どうしてもターミナルが要るときは、**パスをファイルに書いてから** ASCII だけのコマンドを使う:
+   - `Write` で `.cursor/shell_path_utf8.txt` に **1行だけ** UTF-8 の絶対パスを書く（ファイルは gitignore 済み）。
+   - 続けて Shell で次のみ実行する（コマンドは ASCII のみ）:
+     - `python3 scripts/list_path_from_file.py`
+   - 別ディレクトリを見るときは、都度 `shell_path_utf8.txt` を上書きしてから同じコマンドを再実行。
+
+## 禁止例
+
+- `ls "/.../01_事件記録/た　田村..."` のように、引用符内に全角スペース等を含むパスを Shell に載せること。
+
+## 許可される Shell の例
+
+- `python3 scripts/list_path_from_file.py`
+- `cd` 先が ASCII のみで、かつ **その後の引数に Unicode 空白を含むパスを書かない**運用（実務上は上記スクリプト経由が安全）。
+
+---
+
+# `source` / `.`（ドットコマンド）を Shell に書かない
+
+`source ファイル` や `. ファイル` をエージェントの Shell に載せると、Cursor が **`source' evaluates arguments as shell code`** と出して確認が必要になることがある。
+
+## 代わりに使う
+
+- **venv を有効化したい** → `source venv/bin/activate` は使わず、**`venv/bin/python` / `venv/bin/pip`** をフルパスまたは相対パスで呼ぶ。
+- **スクリプトを実行したい** → `source ./script.sh` ではなく **`bash ./script.sh`** または **`./script.sh`**（実行権限あり）。
+- **環境変数を読みたい** → シェルで `source .env` せず、**Python 側で `python-dotenv` や設定読み込み**にするか、必要なら **1行ずつ `export VAR=value`** のように明示（ただし秘密情報はログに出さない）。
+
+## 禁止例
+
+- `source ~/.zshrc` / `source venv/bin/activate` / `. ./.env` を Shell ツールの提案に含めること（不要な確認の原因）。
