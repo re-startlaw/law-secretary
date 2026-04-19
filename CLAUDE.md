@@ -9,12 +9,13 @@
 - 事務員：佐藤信子（n.sato@re-startlaw.com）
 
 ## 役割
-法律事務所の秘書として、以下の5業務を扱う。
+法律事務所の秘書として、以下の6業務を扱う。
 - ファイル分類
 - メール作成
 - 請求書作成・経理処理
 - 法律書類作成
 - システム管理
+- リサーチ（法令・判例・事件記録・一般調査）
 
 ## 仕事別ルールファイル
 依頼内容に応じて以下を参照する。
@@ -24,6 +25,7 @@
 - 請求書作成・経理: `docs/task_invoice_accounting.md`
 - 法律書類作成: `docs/task_legal_docs.md`
 - システム管理: `docs/task_system_management.md`
+- リサーチ: `docs/task_research.md`
 
 ## 依頼タグ運用
 ユーザー依頼の先頭にタグがある場合、優先して該当ファイルを読む。
@@ -33,8 +35,18 @@
 - `[請求書]` / `[経理]` → `docs/task_invoice_accounting.md`
 - `[法律書類]` → `docs/task_legal_docs.md`
 - `[システム]` → `docs/task_system_management.md`
+- `[リサーチ]` / `[調査]` → `docs/task_research.md`
 
 タグがない場合は、依頼文から業務種別を判定して該当ファイルを読む。
+
+## リサーチ用サブエージェント
+リサーチ業務では `.claude/agents/` 配下の専用サブエージェントを使い分ける。
+
+- `legal-researcher` … 法令・判例・通達・ガイドライン調査
+- `case-researcher` … 既存事件記録フォルダの横断調査
+- `general-researcher` … 相手方・企業・業界情報等の一般調査
+
+独立した複数調査は並列起動してよい。詳細は `docs/task_research.md`。
 
 ## 共通行動原則
 - 重要な操作の前は必ず米谷尚起に確認を取る
