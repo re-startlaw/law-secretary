@@ -14,3 +14,19 @@ logs/
 
 # Runtime log
 secretary.log
+
+# バックアップフォルダ（依頼者資料のスナップショット）
+.backup_*/
+
+# 依頼者名・個別案件を含む使い捨てスクリプトはGit管理せず、Drive同期のみで保全
+# 汎用ヘルパー（path_ops.py 等）は scripts/!path_ops.py のように明示的にexcept
+scripts/*
+!scripts/path_ops.py
+!scripts/list_path_from_file.py
+!scripts/backup_to_drive.sh
+
+# 同期用の一時・ログ
+.sync/
+
+# Claude Codeのローカル設定・ロック（マシン固有）
+.claude/

@@ -11,15 +11,31 @@
 ## Unicode whitespace警告の扱い
 - 人名・フォルダ名の空白は維持し、`_` への置換は行わない。
 
-### Cursor の「source evaluates arguments as shell code」確認を避ける（推奨）
+### Cursor の「source evaluates arguments as shell code」確認を避ける（必須）
 - Shell 提案に **`source` / `.`（ドットコマンド）を書かない**（venv は `venv/bin/python` を直接使う、スクリプトは `bash script.sh` など）。
 
-### Cursor の「Contains Unicode whitespace」確認を避ける（推奨）
-- **Shell のコマンド文字列に、全角スペース等を含むパスを直接書かない**（こうすると Cursor が実行前に毎回確認する）。
-- **一覧・中身の確認**は、可能なら **Glob / Read**（ツール）で行う。
-- ターミナルが必要なとき: `Write` で `.cursor/shell_path_utf8.txt` に調べたいディレクトリの**絶対パスを1行**で書き、その後 Shell で **ASCII だけ**の次を実行する:
-  - `python3 scripts/list_path_from_file.py`
-- 別フォルダを見るときは `shell_path_utf8.txt` を上書きしてから再実行。
+### Cursor の「Contains Unicode whitespace」確認を避ける（必須）
+**Bash ツールの `command` に U+3000（全角スペース）・U+00A0（NBSP）等を1文字でも含めない**。含めた瞬間に Cursor が毎回確認を出す。依頼者フォルダ名は保持する（`_` 置換は禁止）ので、必ず下記の迂回手順を使う。
+
+**禁止パターン（過去に警告を出した実例）**
+- `osascript <<'EOF' ... folder "す　鈴木七海" ... EOF`（Finderの `tell` 構文で依頼者名直書き）
+- `open/cp/mv/rm "/.../た　田村正宜/..."` のような全角スペース入りパス直書き
+- `python3 <<'PY' ... re.compile(r'[　 ]') ... PY`（ヒアドキュメント内に U+3000/U+00A0 リテラル）
+- `grep $'　' file`（シェル文字列リテラルに全角スペース）
+
+**推奨手順**
+1. **一覧・中身の確認**は Glob / Read ツールを第一選択にする。Bash の `ls` `cat` `find` は使わない。
+2. ターミナル操作が必要なときは `Write` で `.cursor/shell_path_utf8.txt` にパスを書き出し（1行目=主対象、2行目=副対象）、ASCII だけのコマンドで `scripts/path_ops.py` を呼ぶ:
+   - `venv/bin/python scripts/path_ops.py ls` — 1行目ディレクトリの一覧
+   - `venv/bin/python scripts/path_ops.py open` — 全行を `open`
+   - `venv/bin/python scripts/path_ops.py cp` — 1→2行でコピー
+   - `venv/bin/python scripts/path_ops.py mv` — 1→2行で移動
+   - `venv/bin/python scripts/path_ops.py stat` — 存在/種別/サイズ
+   - `venv/bin/python scripts/path_ops.py glob '*.docx'` — パターンは ASCII のみ
+3. 既存の `scripts/list_path_from_file.py` は互換用途で利用可。
+4. 複雑な処理（複数ファイル処理・正規表現等）は `scripts/` 以下に個別 Python スクリプトを作成し、**日本語パスはスクリプト内のリテラルに閉じ込める**。Bash で呼ぶときは `venv/bin/python scripts/xxx.py` のように ASCII のみにする。
+5. 正規表現で Unicode 空白を扱うときは **必ずエスケープ**（`　`, ` `）。リテラル貼り付けはしない。
+6. 別フォルダを見るときは `.cursor/shell_path_utf8.txt` を上書きしてから再実行する。
 
 ### ダイアログが出たとき
 - 上記を踏まえても確認が出た場合は、共有用・事件記録・分類依頼由来のパスとして `Yes` で続行してよい。

@@ -45,10 +45,44 @@
 - 常に日本語で応答する
 - セキュリティルールを最優先する
 
+## Word/Excel修正時の必須ルール（直接編集禁止）
+作成済みのWord(.docx)/Excel(.xlsx)ファイルに修正指示が入った場合、**元ファイルを直接編集してはならない**。必ず以下の手順で別バージョンとして保存する。
+
+1. 修正前に、元ファイルと**同じフォルダ**に元ファイル名の末尾に`_2`（既に存在する場合は`_3`、`_4`...と空き番号）を付けたコピーを作成する
+2. コピーしたファイルに対してのみ修正を加える
+3. 修正後は`open`で新バージョンを開いて米谷弁護士に報告する
+
+対象：委任契約書・請求書・準備書面・意見書・上申書・通知書など、作成済みWord/Excel全般。
+理由：過去バージョンの保全、修正履歴の追跡、誤修正の巻き戻しと差分比較を可能にするため。
+例外なし：「小さな修正だから」「誤字だけだから」でも直接編集しない。
+
 ## 事件記録フォルダ運用（Unicode whitespace・Cursor の確認ダイアログ）
-- **まず `Contains Unicode whitespace` が出ないようにする。** 原因は、Shell のコマンド行に全角スペース等を含むパスをそのまま書くこと。依頼者フォルダ名の空白は正しいので、**パスを `_` に置換しない。**
-- **Shell にフルパスを載せない:** 一覧・確認は Glob / Read を優先。ターミナルが必要なときは `docs/task_file_classification.md` の「Cursor の Unicode 確認を避ける」に従い、`.cursor/shell_path_utf8.txt` ＋ `python3 scripts/list_path_from_file.py` など **コマンド行が ASCII だけ**になる方法を使う。
-- **`source` / `.` を Shell 提案に書かない**（Cursor が `source' evaluates arguments as shell code` と止めることがある）。venv は `venv/bin/python`、スクリプトは `bash script.sh` で代替する。
+
+### 大原則
+- **Bash ツールの `command` 文字列に U+3000（全角スペース）・U+00A0（NBSP）等の Unicode 空白を一切含めない。** 含まれた瞬間 Cursor が `Contains Unicode whitespace` を出す。依頼者フォルダ名の空白は保持するので、**パスを `_` に置換しない。** 代わりに「パスをファイル経由で渡す」方式を使う。
+- 一覧・存在確認・内容確認は **Glob / Read ツール優先**。Bash の `ls` `cat` `find` は使わない。
+
+### 禁止パターン（確認ダイアログの実発生原因）
+以下は**Bash ツールから実行しない**。U+3000 を含むため必ず警告が出る。
+1. `osascript <<'EOF' tell application "Finder" ... folder "す　鈴木七海" ... EOF` — 依頼者フォルダ名直書き
+2. `open "/Users/.../マイドライブ/.../す　鈴木七海/..."` — 全角スペース入りパス直書き
+3. `cp/mv/rm "/.../た　田村正宜/..."` — 同上
+4. `python3 <<'PY' ... re.compile(r'[　 ]') ... PY` — ヒアドキュメント内の正規表現に U+3000/U+00A0 をリテラルで書く（必ず `　` ` ` エスケープを使う）
+5. `grep $'　' file` — シェルに全角スペースを埋め込む
+
+### 許容パターン（ASCII のみのコマンド行）
+対象パスは `.cursor/shell_path_utf8.txt`（UTF-8・1行1パス）に書き出してから、以下のヘルパーを呼ぶ。
+- 一覧: `venv/bin/python scripts/path_ops.py ls`
+- 開く: `venv/bin/python scripts/path_ops.py open`
+- コピー: 1行目=src, 2行目=dst → `venv/bin/python scripts/path_ops.py cp`
+- 移動: 1行目=src, 2行目=dst → `venv/bin/python scripts/path_ops.py mv`
+- 存在/種別/サイズ: `venv/bin/python scripts/path_ops.py stat`
+- glob（パターンは ASCII のみ）: `venv/bin/python scripts/path_ops.py glob '*.docx'`
+- 互換用の旧ヘルパー `scripts/list_path_from_file.py` も引き続き利用可。
+- 複雑な処理は個別に Python スクリプトを作成し、日本語パスはスクリプト内の文字列リテラルに閉じ込める（Bash コマンド行には出さない）。
+
+### その他
+- **`source` / `.` を Bash 提案に書かない**（Cursor が `source' evaluates arguments as shell code` と止める）。venv は `venv/bin/python`、スクリプトは `bash script.sh` で代替する。
 - それでもダイアログが出た場合のみ、事件記録・分類依頼由来のパスとして `Yes` でよい。
 - コマンド本文（オプション・フラグ・記号列）に不審な文字がある場合は停止し、米谷尚起へ確認する。
 - `rm`、上書きを伴う `mv`、一括変更の前には対象一覧を提示し、承認を得てから実行する。

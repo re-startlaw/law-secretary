@@ -72,6 +72,7 @@ EMAIL_SIGNATURE = (
     "〒170-6012 東京都豊島区東池袋３丁目１−１ サンシャイン60 12階\n"
     "弁護士法人Re-Start法律事務所\n"
     "弁護士 米谷尚起\n"
+    "専属AIエージェント\n"
     "TEL : 03-6820-3815"
 )
 
@@ -325,14 +326,17 @@ def load_client_folders():
 # 分類判断
 # ════════════════════════════════════════════════════════════════
 
-def classify_accounting(filename):
-    """経理書類として分類できる場合、移動先パスを返す。"""
+def classify_accounting(filename, context=""):
+    """経理書類として分類できる場合、移動先パスを返す。
+    context は送信者・メールタイトルなど、ファイル名以外のヒント文字列。
+    """
+    haystack = f"{filename} {context}"
     keywords_in_name = ["領収書", "請求書", "精算"]
-    is_accounting = any(kw in filename for kw in keywords_in_name)
+    is_accounting = any(kw in haystack for kw in keywords_in_name)
 
     matched_category = None
     for category, keywords in ACCOUNTING_KEYWORDS.items():
-        if any(kw in filename for kw in keywords):
+        if any(kw in haystack for kw in keywords):
             matched_category = category
             break
 
@@ -346,24 +350,26 @@ def classify_accounting(filename):
     return None
 
 
-def classify_case_record(filename, clients):
+def classify_case_record(filename, clients, context=""):
     """事件記録として分類できる場合、移動先パスを返す。
     依頼者名は client_name と CLIENT_ALIASES に列挙した別名のどちらでもマッチする。
+    context（送信者・件名）も依頼者名・サブフォルダ判定の検索対象にする。
     """
+    haystack = f"{filename} {context}"
     for client in clients:
         names = [client["client_name"]] + CLIENT_ALIASES.get(client["client_name"], [])
-        if not any(name in filename for name in names):
+        if not any(name in haystack for name in names):
             continue
         # 依頼者が見つかった → サブフォルダを判定
         if client["case_type"] == "criminal":
-            subfolder = _match_subfolder(filename, CRIMINAL_SUBFOLDER_KEYWORDS)
+            subfolder = _match_subfolder(haystack, CRIMINAL_SUBFOLDER_KEYWORDS)
         elif client["case_type"] == "civil":
-            subfolder = _match_subfolder(filename, CIVIL_SUBFOLDER_KEYWORDS)
+            subfolder = _match_subfolder(haystack, CIVIL_SUBFOLDER_KEYWORDS)
         else:
             # 刑事/民事マーカーが無い案件（在留特別許可等）は双方のキーワードで試み、
             # 実在するサブフォルダのみ採用する。
             combined = {**CIVIL_SUBFOLDER_KEYWORDS, **CRIMINAL_SUBFOLDER_KEYWORDS}
-            subfolder = _match_subfolder(filename, combined)
+            subfolder = _match_subfolder(haystack, combined)
             if subfolder and not os.path.isdir(os.path.join(client["path"], subfolder)):
                 subfolder = None
 
@@ -374,28 +380,37 @@ def classify_case_record(filename, clients):
     return None
 
 
-def _match_subfolder(filename, keyword_map):
+def _match_subfolder(text, keyword_map):
     """キーワードマップからサブフォルダ名を返す。"""
     for subfolder, keywords in keyword_map.items():
-        if any(kw in filename for kw in keywords):
+        if any(kw in text for kw in keywords):
             return subfolder
     return None
 
 
-def classify_file(filename, clients):
-    """ファイル名から分類先のパスを返す。判断不能ならpre_trashを返す。
+def classify_file(filename, clients, sender="", subject=""):
+    """ファイル名＋送信者＋メールタイトルから分類先のパスを返す。
+    判断不能なら分からなかったフォルダを返す。
+
+    Args:
+        filename: ファイル名
+        clients: 依頼者フォルダ一覧
+        sender: 保存ログC列（送信者）— スプレッドシートから渡す
+        subject: 保存ログB列（メールタイトル）— スプレッドシートから渡す
 
     Returns:
         tuple: (dest_path, description)
     """
-    # 1. 経理書類チェック
-    dest = classify_accounting(filename)
+    context = f"{sender or ''} {subject or ''}".strip()
+
+    # 1. 事件記録チェック（送信者が依頼者由来なら最優先で当てる）
+    dest = classify_case_record(filename, clients, context)
     if dest:
         rel = os.path.relpath(dest, os.path.join(BASE_PATH, "共有用"))
         return dest, rel
 
-    # 2. 事件記録チェック
-    dest = classify_case_record(filename, clients)
+    # 2. 経理書類チェック（ベンダー送信者や件名から経理勘定を推定）
+    dest = classify_accounting(filename, context)
     if dest:
         rel = os.path.relpath(dest, os.path.join(BASE_PATH, "共有用"))
         return dest, rel
@@ -451,17 +466,24 @@ def fetch_sheet_data(sheets_service):
 
 def build_filename_index(sheet_data):
     """シートデータからD列（ファイル名）→ 行番号（1-based）のマップを作る。
-    同時にE列（移動先）の値も保持する。
+    同時にB列（メールタイトル）・C列（送信者）・E列（移動先）の値も保持する。
     Returns:
-        dict: {filename: {"row": int, "dest": str}}
+        dict: {filename: {"row": int, "subject": str, "sender": str, "dest": str}}
     """
     index = {}
     for i, row in enumerate(sheet_data):
         if i == 0:
             continue  # ヘッダーをスキップ
         if len(row) >= 4 and row[3]:
+            subject = row[1] if len(row) >= 2 else ""
+            sender = row[2] if len(row) >= 3 else ""
             dest = row[4] if len(row) >= 5 else ""
-            index[row[3]] = {"row": i + 1, "dest": dest}  # 1-based行番号
+            index[row[3]] = {
+                "row": i + 1,  # 1-based行番号
+                "subject": subject,
+                "sender": sender,
+                "dest": dest,
+            }
     return index
 
 
@@ -784,7 +806,14 @@ def main():
             skipped += 1
             continue
 
-        dest_dir, dest_description = classify_file(original_name, clients)
+        # スプレッドシートから送信者・件名を取り出して分類ヒントに使う
+        meta = filename_index.get(original_name, {})
+        sender = meta.get("sender", "")
+        subject = meta.get("subject", "")
+
+        dest_dir, dest_description = classify_file(
+            original_name, clients, sender=sender, subject=subject
+        )
         new_name = rename_file(original_name)
 
         # 重複検出: 移動先に同名かつ同一内容のファイルが既にある場合は pre_trash へ退避
