@@ -71,7 +71,7 @@ def build_lines(args):
     if args.items:
         items_list = json.loads(args.items)
     else:
-        items_list = [{"description": args.description, "amount": args.amount}]
+        items_list = [{"description": args.description or args.title, "amount": args.amount}]
     return [
         {
             "type": "item",
@@ -111,7 +111,7 @@ def create_invoice(args):
         "withholding_tax_entry_method": "out",
         "partner_id": partner["id"],
         "partner_title": partner_title,
-        "memo": args.description or "",
+        "memo": args.description or " ",
         "invoice_note": args.note or "",
         "lines": build_lines(args),
     }
