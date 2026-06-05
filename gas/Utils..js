@@ -21,17 +21,19 @@ function getSettingsFromSheet() {
 /**
  * ログシートへ書き込み（画像のA~E列に対応）
  */
-function logToSheet(sender, subject, action, url) {
+function logToSheet(sender, subject, action, url, detail) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(CONFIG.SHEET_LOGS);
   
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.SHEET_LOGS);
-    sheet.appendRow(['日時', '送信者', '件名', 'アクション', 'メールURL']);
+    sheet.appendRow(['日時', '送信者', '件名', 'アクション', 'メールURL', '詳細']);
+  } else if (sheet.getLastColumn() < 6) {
+    sheet.getRange(1, 6).setValue('詳細');
   }
   
   const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy年M月d日HH時mm分');
-  sheet.appendRow([timestamp, sender, subject, action, url]);
+  sheet.appendRow([timestamp, sender, subject, action, url, detail || '']);
 }
 
 /**
@@ -100,7 +102,7 @@ function collectMyBodies_(query, max) {
       if (!from || from !== myEmail) continue;
       const body = stripQuotedReplies_(m.getPlainBody() || '');
       if (body.length < 30) continue; // 短すぎるリプライは文体学習に不向き
-      bodies.push(body.substring(0, 1500));
+      bodies.push(body.substring(0, 800));
     }
   }
   return bodies;
@@ -121,4 +123,129 @@ function fetchSentExamplesForRecipient(recipientEmail, maxExamples) {
  */
 function fetchRecentSentExamples(maxExamples) {
   return collectMyBodies_('in:sent newer_than:60d', maxExamples);
+}
+
+/**
+ * GeminiがMarkdown等を混ぜても、最初のJSONオブジェクトだけを取り出す
+ */
+function parseJsonFromGeminiResponse_(text) {
+  if (!text) return null;
+  const raw = String(text).trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+      return JSON.parse(raw.substring(start, end + 1));
+    } catch (e2) {
+      return null;
+    }
+  }
+}
+
+/**
+ * 裁判所・検察庁・警察・相手方代理人等は保留寄りの文体に寄せる
+ */
+function classifySenderRisk_(sender, subject, body) {
+  const text = `${sender || ''}\n${subject || ''}\n${(body || '').substring(0, 500)}`.toLowerCase();
+  const highRiskPatterns = [
+    '裁判所', '検察', '検察庁', '警察', '弁護士', '法律事務所', '法務局',
+    '家庭裁判所', '地方裁判所', '簡易裁判所', '高等裁判所',
+    'courts.go.jp', 'moj.go.jp', 'npa.go.jp', 'police', 'law'
+  ];
+  const isHighRisk = highRiskPatterns.some((p) => text.indexOf(String(p).toLowerCase()) >= 0);
+
+  if (isHighRisk) {
+    return {
+      level: 'high',
+      label: '高リスク相手',
+      instruction: [
+        'この相手は高リスク相手として扱う。',
+        '文体は短く、硬く、保留寄りにする。',
+        '原則として「受領しました」「確認します」「追って回答します」「必要資料をご送付ください」程度に留める。',
+        '謝罪、譲歩、事実認定、法律判断、事件方針、見通しに見える表現は避ける。'
+      ].join('\n')
+    };
+  }
+
+  return {
+    level: 'normal',
+    label: '通常相手',
+    instruction: [
+      'この相手は通常相手として扱う。',
+      '丁寧だが簡潔にし、必要な返答・依頼・保留事項だけを書く。',
+      '法律判断、事件方針、見通しは通常相手でも必ず【要回答】にする。'
+    ].join('\n')
+  };
+}
+
+function normalizeStringArray_(value, maxItems, maxLength) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => String(v || '').replace(/\s+/g, ' ').trim())
+    .filter((v) => v)
+    .slice(0, maxItems)
+    .map((v) => v.substring(0, maxLength));
+}
+
+/**
+ * AI出力を固定フォーマットでGmail下書き本文にする
+ */
+function formatDraftBody_(parsed, rawResponse, riskProfile) {
+  const warning = [
+    '※以下はAI作成の下書きです。送信前に【要入力】【要回答】を削除・修正してください。',
+    '※法律判断・事件方針・見通し・金額・期限は必ず確認してください。'
+  ].join('\n');
+
+  if (!parsed || typeof parsed !== 'object') {
+    return [
+      warning,
+      '',
+      `【相手種別】${riskProfile.label}`,
+      '',
+      '【要確認】',
+      'AI出力をJSONとして解析できませんでした。以下は送信せず、内容確認用として扱ってください。',
+      '',
+      '【AI出力】',
+      String(rawResponse || '').substring(0, 2000)
+    ].join('\n');
+  }
+
+  const memo = normalizeStringArray_(parsed.memo, 3, 120);
+  const placeholders = normalizeStringArray_(parsed.placeholders, 10, 120);
+  const riskFlags = normalizeStringArray_(parsed.riskFlags, 10, 160);
+  const draft = String(parsed.draft || '').trim();
+
+  const parts = [
+    warning,
+    '',
+    `【相手種別】${riskProfile.label}`
+  ];
+
+  if (memo.length > 0) {
+    parts.push('', '【相手の要望メモ】');
+    memo.forEach((item) => parts.push(`- ${item}`));
+  }
+
+  parts.push('', '【返信本文案】');
+  parts.push(draft || 'ご連絡ありがとうございます。\n内容を確認のうえ、改めてご連絡いたします。');
+
+  if (placeholders.length > 0) {
+    parts.push('', '【要入力】');
+    placeholders.forEach((item) => parts.push(`- ${item}`));
+  }
+
+  if (riskFlags.length > 0) {
+    parts.push('', '【要確認】');
+    riskFlags.forEach((item) => parts.push(`- ${item}`));
+  }
+
+  return parts.join('\n');
 }
