@@ -66,6 +66,134 @@ function extractEmail_(fromField) {
   return (m ? m[1] : String(fromField)).trim();
 }
 
+function hasAddressInList_(list, email) {
+  const lowerEmail = String(email || '').toLowerCase();
+  if (!lowerEmail) return false;
+  return String(list || '')
+    .split(',')
+    .map((e) => extractEmail_(e).toLowerCase())
+    .some((e) => e === lowerEmail);
+}
+
+function hasYonetaniSalutation_(body) {
+  const firstLines = String(body || '')
+    .split(/\r?\n/)
+    .slice(0, 3)
+    .join('\n');
+  return /米谷|先生/.test(firstLines);
+}
+
+function excludeMyAddress_(list, myEmail) {
+  const lowerMyEmail = String(myEmail || '').toLowerCase();
+  return String(list || '')
+    .split(',')
+    .map((e) => e.trim())
+    .filter((e) => e && (!lowerMyEmail || !e.toLowerCase().includes(lowerMyEmail)))
+    .join(', ');
+}
+
+function extractEmailsFromText_(text) {
+  const matches = String(text || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
+  if (!matches) return [];
+  const seen = {};
+  return matches
+    .map((email) => email.trim())
+    .filter((email) => {
+      const key = email.toLowerCase();
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+}
+
+/**
+ * no-reply系の相談メールは、実際の相談者メールアドレスを本文から拾う
+ */
+function resolveReplyRecipients_(sender, subject, body, originalTo, originalCc, myEmail) {
+  const senderEmail = extractEmail_(sender).toLowerCase();
+  const ccList = excludeMyAddress_(originalCc, myEmail);
+
+  if (
+    senderEmail === 'no-reply@mail.coconala.com' &&
+    String(subject || '').indexOf('[ココナラ法律相談] お問い合わせメールが届いています') >= 0
+  ) {
+    const candidates = extractEmailsFromText_(body).filter((email) => {
+      const lower = email.toLowerCase();
+      return lower !== senderEmail && lower !== String(myEmail || '').toLowerCase();
+    });
+
+    if (candidates.length > 0) {
+      return { to: candidates[0], cc: '' };
+    }
+  }
+
+  const toList = [sender, excludeMyAddress_(originalTo, myEmail)].filter((e) => e).join(', ');
+  return { to: toList, cc: ccList };
+}
+
+/**
+ * B5の明確な条件はAIへ渡す前に機械判定する
+ */
+function evaluateStaticReplyNecessity_(sender, subject, body, originalTo, originalCc, myEmail) {
+  const senderEmail = extractEmail_(sender).toLowerCase();
+  const subjectText = String(subject || '');
+  const bodyText = String(body || '');
+
+  const isCoconalaInquiry =
+    senderEmail === 'no-reply@mail.coconala.com' &&
+    subjectText.indexOf('[ココナラ法律相談] お問い合わせメールが届いています') >= 0;
+
+  if (isCoconalaInquiry) {
+    return {
+      needsReply: true,
+      reason: 'ココナラ法律相談の例外メールのため、返信下書き作成対象にしました。'
+    };
+  }
+
+  const senderBlacklist = new Set([
+    'no-reply@printing.ne.jp',
+    't-hoso-ml@googlegroups.com',
+    'shinwazenki@googlegroups.com',
+    'noreply@tm.openai.com',
+    'noreply-apps-scripts-notifications@google.com',
+    'noreply@appsheet.com',
+    'n.kometani@re-startlaw.com',
+    'nobukosato2020@gmail.com',
+    'support@myteam108.jp'
+  ]);
+
+  if (senderBlacklist.has(senderEmail)) {
+    return {
+      needsReply: false,
+      reason: `送信元 ${senderEmail} は返信不要ブラックリストに含まれるため、返信不要としました。`
+    };
+  }
+
+  const subjectBlacklist = ['[t-hoso-ml:', '[shinwazenki'];
+  if (subjectBlacklist.some((pattern) => subjectText.indexOf(pattern) >= 0)) {
+    return {
+      needsReply: false,
+      reason: '件名が返信不要ブラックリストに一致するため、返信不要としました。'
+    };
+  }
+
+  if (!hasAddressInList_(originalTo, myEmail) && hasAddressInList_(originalCc, myEmail)) {
+    return {
+      needsReply: false,
+      reason: '自分のアドレスがToに含まれずCCのみ受信のため、返信不要としました。'
+    };
+  }
+
+  if (!hasYonetaniSalutation_(bodyText)) {
+    return {
+      needsReply: false,
+      reason: '本文冒頭に「米谷」または「先生」の宛名が見当たらないため、返信不要としました。'
+    };
+  }
+
+  return null;
+}
+
 /**
  * 引用部（> から始まる行・"On ... wrote:"・日本語の日時引用ヘッダ等）を除去
  */
