@@ -26,12 +26,13 @@
   `venv/bin/python freee_invoice.py create --business corporate --partner-name "取引先名" --title "件名" --issue-date 2026-04-17 --due-date 2026-04-30 --items '[{"description":"項目A","amount":400000},{"description":"項目B","amount":100000}]'`
 - `--amount` と `--items` の金額はいずれも**税別**（`tax_entry_method=out`）
 
-## freee経理連携
-- 実行: `venv/bin/python freee_sync.py`
-- 入力: `06_分類依頼/freee/` にPDFを配置
-- 処理済み: `06_分類依頼/freee/処理済み/`
-- 要確認: `06_分類依頼/freee/要確認/`
-- ログ: `logs/freee_sync_YYYYMMDD.log`
+## freeeファイルボックス自動アップロード（米谷尚起／Re-Start法律事務所名義の経理書類）
+- **対象**: 03_経理/ 配下に分類されたファイルのうち、本文に「米谷尚起」または「Re-Start法律事務所」の名義が登場するもの。除外: 預り金・事業主貸・預け金・04_会計勉強
+- **動作**: 朝の自動分類バッチ（`secretary.py`）内で `_detect_freee_target` が該当判定→`freee_filebox.upload_receipt` で法人事業所のファイルボックスへ自動アップロード
+- **報告**: 同バッチの通知メール（佐藤様・米谷宛）の「佐藤様 本日のお願い」セクションに、アップロード結果（receipt_id・ファイルボックスURL）を一覧表示。佐藤さんはfreee上で仕訳登録のみ行う
+- **手動アップロード**:
+  `venv/bin/python freee_filebox.py upload --file <path> --issue-date YYYY-MM-DD --description "<摘要>" --business corporate`
+- 失敗時は通知メールに「アップロード失敗」と記載されるので、佐藤さんが手動アップロードで対応
 
 ## 認証
 - `.env` に OAuth2 トークンを保存（自動リフレッシュ）
@@ -42,7 +43,7 @@
 - 元ファイルと同じフォルダに`元ファイル名_2.xlsx`（既にあれば`_3`, `_4`...）としてコピーを作成し、コピー側のみ修正
 - 金額訂正・宛名修正・品目追加など、規模に関わらず例外なく別バージョン保存
 - 修正後は`open`で新バージョンを開く
-- CLAUDE.md「Word/Excel修正時の必須ルール」も参照
+- AGENTS.md「Word/Excel修正時の必須ルール」も参照
 
 ## 注意事項
 - 金額・期日・送信先メールは実行前に必ず復唱確認する

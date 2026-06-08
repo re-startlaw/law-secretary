@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Perform common filesystem operations on paths that contain Unicode
-whitespace (e.g. U+3000 全角スペース), **without** putting those paths
+whitespace (e.g. U+3000 full-width space), **without** putting those paths
 on the shell command line.
 
-All target paths are read from `.cursor/shell_path_utf8.txt` (one path
-per line) so the invoking shell command stays ASCII-only, which prevents
-Cursor's "Contains Unicode whitespace" confirmation dialog.
+All target paths are read from `.codex/shell_path_utf8.txt` (one path
+per line) so the invoking shell command stays ASCII-only in agent tools.
+For compatibility with the previous local setup, the legacy
+`.cursor/shell_path_utf8.txt` path is used if the Codex path does not exist.
 
 Usage (command line is ASCII-only in every case):
 
@@ -39,7 +40,8 @@ import subprocess
 import sys
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-_DEFAULT_PATH_FILE = os.path.join(_REPO_ROOT, ".cursor", "shell_path_utf8.txt")
+_DEFAULT_PATH_FILE = os.path.join(_REPO_ROOT, ".codex", "shell_path_utf8.txt")
+_LEGACY_PATH_FILE = os.path.join(_REPO_ROOT, ".cursor", "shell_path_utf8.txt")
 
 
 def _read_lines(path_file: str) -> list[str]:
@@ -135,6 +137,12 @@ def main() -> None:
     if not os.path.isabs(path_file):
         path_file = os.path.join(_REPO_ROOT, path_file)
     path_file = os.path.abspath(path_file)
+    if (
+        path_file == os.path.abspath(_DEFAULT_PATH_FILE)
+        and not os.path.exists(path_file)
+        and os.path.exists(_LEGACY_PATH_FILE)
+    ):
+        path_file = _LEGACY_PATH_FILE
 
     try:
         targets = _read_lines(path_file)

@@ -10,6 +10,7 @@ logs/
 .DS_Store
 
 # UTF-8 path blob for scripts/list_path_from_file.py (avoids Unicode-in-shell prompts)
+.codex/shell_path_utf8.txt
 .cursor/shell_path_utf8.txt
 
 # Runtime log
@@ -24,9 +25,16 @@ scripts/*
 !scripts/path_ops.py
 !scripts/list_path_from_file.py
 !scripts/backup_to_drive.sh
+!scripts/extract_text.py
 
 # 同期用の一時・ログ
 .sync/
 
-# Claude Codeのローカル設定・ロック（マシン固有）
+# ローカルエージェント設定・ロック（マシン固有）
 .claude/
+
+prompt.md
+prompts/
+
+# Obsidian Vault（Googleドライブのシンボリックリンク。中身はGit管理しない）
+obsidian-vault

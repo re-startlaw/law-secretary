@@ -1,0 +1,10 @@
+
+
+[embedded]
+
+
+[ocr]
+
+
+[crop]
+WT    ay  :        し

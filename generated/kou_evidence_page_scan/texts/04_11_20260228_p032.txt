@@ -1,0 +1,12 @@
+
+
+[embedded]
+
+
+[ocr]
+
+
+[crop]
+eae   本US
+=
+few Year    i

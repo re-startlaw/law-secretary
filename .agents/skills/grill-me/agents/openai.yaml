@@ -1,0 +1,4 @@
+interface:
+  display_name: "GrillMe"
+  short_description: "設計案を一問一答で厳しく詰め、判断漏れを潰す面接スキル"
+  default_prompt: "$grill-me でこのプランを厳しくレビューし、判断を1つずつ詰めてください。"

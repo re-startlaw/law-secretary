@@ -2,7 +2,7 @@
 """List a directory whose path contains Unicode spaces (e.g. U+3000).
 
 The target path is read from a UTF-8 file so the *shell command line* stays
-ASCII-only and Cursor does not show "Contains Unicode whitespace".
+ASCII-only in agent tools.
 """
 
 from __future__ import annotations
@@ -12,7 +12,8 @@ import os
 import sys
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-_DEFAULT_PATH_FILE = os.path.join(_REPO_ROOT, ".cursor", "shell_path_utf8.txt")
+_DEFAULT_PATH_FILE = os.path.join(_REPO_ROOT, ".codex", "shell_path_utf8.txt")
+_LEGACY_PATH_FILE = os.path.join(_REPO_ROOT, ".cursor", "shell_path_utf8.txt")
 
 
 def main() -> None:
@@ -27,6 +28,12 @@ def main() -> None:
     if not os.path.isabs(path_file):
         path_file = os.path.join(_REPO_ROOT, path_file)
     path_file = os.path.abspath(path_file)
+    if (
+        path_file == os.path.abspath(_DEFAULT_PATH_FILE)
+        and not os.path.exists(path_file)
+        and os.path.exists(_LEGACY_PATH_FILE)
+    ):
+        path_file = _LEGACY_PATH_FILE
 
     try:
         with open(path_file, encoding="utf-8") as f:

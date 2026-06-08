@@ -1,0 +1,435 @@
+<w:comments xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:w16cex="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid" xmlns:w16="http://schemas.microsoft.com/office/word/2018/wordml" xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du" xmlns:w16sdtdh="http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash" xmlns:w16sdtfl="http://schemas.microsoft.com/office/word/2024/wordml/sdtformatlock" xmlns:w16se="http://schemas.microsoft.com/office/word/2015/wordml/symex" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" mc:Ignorable="w14 w15 w16se w16cid w16 w16cex w16sdtdh w16sdtfl w16du wp14">
+  <w:comment w:id="2" w:author="愛徒 田中" w:date="2026-04-23T11:29:00Z" w:initials="愛田">
+    <w:p w14:paraId="6EC7405D" w14:textId="77777777" w:rsidR="00066629" w:rsidRDefault="00066629" w:rsidP="00066629">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:color w:val="222222"/>
+          <w:highlight w:val="white"/>
+        </w:rPr>
+        <w:t>週次レポートの対象期間を明記しました。</w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="11" w:author="AOI W" w:date="2026-03-19T18:15:00Z" w:initials="AW">
+    <w:p w14:paraId="01D2922B" w14:textId="7408CECA" w:rsidR="00B41D8F" w:rsidRDefault="00752B7F" w:rsidP="00B41D8F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>機密情報や個人情報の保護の観点から、事前の書面承諾のない再委託を禁止する条項をいれさせてください</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="15" w:author="AOI W" w:date="2026-03-19T18:15:00Z" w:initials="AW">
+    <w:p w14:paraId="514CBD05" w14:textId="15F9340A" w:rsidR="00B41D8F" w:rsidRDefault="00752B7F" w:rsidP="00B41D8F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>採用頂ける場合は以降の条文番号をずらして、１７条の存続条項の中身もずらしてください</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="16" w:author="愛徒 田中" w:date="2026-04-23T11:21:00Z" w:initials="愛田">
+    <w:p w14:paraId="1115EA69" w14:textId="77777777" w:rsidR="00066629" w:rsidRDefault="00066629" w:rsidP="00066629">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:color w:val="222222"/>
+          <w:highlight w:val="white"/>
+        </w:rPr>
+        <w:t>（第〇条第１項）</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:color w:val="222222"/>
+          <w:highlight w:val="white"/>
+        </w:rPr>
+        <w:br/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:color w:val="222222"/>
+          <w:highlight w:val="white"/>
+        </w:rPr>
+        <w:t>成果物を納品するのは制作業務のみであり、納品期日は委託者が一方的に指定するものではなく、受託者との協議により納品期日を定めるものと理解し、その趣旨のとおりに修正しました。</w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="29" w:author="AOI W" w:date="2026-03-19T18:15:00Z" w:initials="AW">
+    <w:p w14:paraId="2C56B29B" w14:textId="3C1E41AA" w:rsidR="00B41D8F" w:rsidRDefault="00752B7F" w:rsidP="00B41D8F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>「個別のやりとりで取引先及び見込み顧客に対し、秘密保持義務を負わせた上で開示することにのみ同意する」でいかがでしょうか</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="30" w:author="愛徒 田中" w:date="2026-04-23T17:37:00Z" w:initials="愛田">
+    <w:p w14:paraId="46E88249" w14:textId="77777777" w:rsidR="00EE071F" w:rsidRDefault="00EE071F" w:rsidP="00EE071F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>ご提案いただいた内容で問題ございません。</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="37" w:author="愛徒 田中" w:date="2026-04-23T11:33:00Z" w:initials="愛田">
+    <w:p w14:paraId="35BEA7BD" w14:textId="77777777" w:rsidR="004A7C70" w:rsidRDefault="004A7C70" w:rsidP="004A7C70">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:color w:val="222222"/>
+          <w:highlight w:val="white"/>
+        </w:rPr>
+        <w:t>成果物を納品するのは制作業務のみであり、納品期日は委託者が一方的に指定するものではなく、受託者との協議により納品期日を定めるものと理解し、その趣旨のとおりに修正しました。</w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="54" w:author="愛徒 田中" w:date="2026-04-23T11:36:00Z" w:initials="愛田">
+    <w:p w14:paraId="0929B6FA" w14:textId="77777777" w:rsidR="004A7C70" w:rsidRDefault="004A7C70" w:rsidP="004A7C70">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:color w:val="222222"/>
+          <w:highlight w:val="white"/>
+        </w:rPr>
+        <w:t>委託者の支払により受託者から委託者に移転される所有権および著作権の範囲が明確でなかったので、修正案第６条第１項に但書を追加して明確にしました。</w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="82" w:author="愛徒 田中" w:date="2026-04-23T11:40:00Z" w:initials="愛田">
+    <w:p w14:paraId="1E4BDD6C" w14:textId="77777777" w:rsidR="0076774F" w:rsidRDefault="0076774F" w:rsidP="0076774F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:color w:val="222222"/>
+          <w:highlight w:val="white"/>
+        </w:rPr>
+        <w:t>機密保持の条項を否定するものではありませんが、委託業務の遂行のために委託者から受託者に対して重要な機密情報が提供されることはなく、委託者の顧客に関する個人情報が受託者に提供されることもないと考え、ここまで詳細な条項は必要ないものと判断し、削除しました。</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="159" w:author="米谷尚起" w:date="2026-04-09T11:51:00Z" w:initials="米谷尚起">
+    <w:p w14:paraId="4655D317" w14:textId="77777777" w:rsidR="00705DC5" w:rsidRDefault="00705DC5" w:rsidP="00E44F8D">
+      <w:pPr>
+        <w:jc w:val="left"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>元々の修正に入れていますが、御社の判断で不要であれば、相手の提案通りでも問題ございません。</w:t>
+      </w:r>
+      <w:r>
+        <w:t>15</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>日だと他の業者を探すのが大変だと思いますので、お互い</w:t>
+      </w:r>
+      <w:r>
+        <w:t>30</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>日程度でもよいかと存じます。</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="162" w:author="AOI W" w:date="2026-03-19T18:14:00Z" w:initials="AW">
+    <w:p w14:paraId="45A7ED02" w14:textId="77777777" w:rsidR="00B41D8F" w:rsidRDefault="00752B7F" w:rsidP="00B41D8F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>EC</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>運用代行業者の引き継ぎには時間がかかるため、乙（ジャグー）から突然</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>30</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>日前に解約されると業務に重大な支障をきたす可能性もあります。乙からの解約申し入れについては最低でも</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>3</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>ヶ月前（</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>90</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>日前）など、非対称の期間設定にしていただきたいです。可能である場合は、以下のように変更して下さい。「甲および乙は、経済事情の変化その他の事由により必要のある場合には、甲については３０日前、乙については</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>90</w:t>
+      </w:r>
+      <w:r w:rsidR="00B41D8F">
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>日前までに相手方に書面にて予告することにより、本契約を解約することができる。」</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="179" w:author="AOI W" w:date="2026-03-19T18:19:00Z" w:initials="AW">
+    <w:p w14:paraId="3B726F42" w14:textId="34F6804D" w:rsidR="00752B7F" w:rsidRDefault="00752B7F" w:rsidP="00752B7F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>最低限の月間稼働時間や、毎月必ず納品・実施する定常業務を明確に定義する条項を追加したいです</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="180" w:author="愛徒 田中" w:date="2026-04-23T17:37:00Z" w:initials="愛田">
+    <w:p w14:paraId="0C749AFF" w14:textId="77777777" w:rsidR="00EE071F" w:rsidRDefault="00EE071F" w:rsidP="00EE071F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>ご意図の通り、業務内容の明確化は重要と認識しておりますため、</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="706ADB6F" w14:textId="77777777" w:rsidR="00EE071F" w:rsidRDefault="00EE071F" w:rsidP="00EE071F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>定常的に実施する業務については契約書上でも整理させていただければと存じます。</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="4E71375F" w14:textId="77777777" w:rsidR="00EE071F" w:rsidRDefault="00EE071F" w:rsidP="00EE071F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>一方で、稼働時間につきましては業務特性上変動する部分もございますため、</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="0A00D00C" w14:textId="77777777" w:rsidR="00EE071F" w:rsidRDefault="00EE071F" w:rsidP="00EE071F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>成果物や実施内容を基準とした形での明確化をご提案させていただけますと幸いです。</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="197" w:author="AOI W" w:date="2026-03-19T18:20:00Z" w:initials="AW">
+    <w:p w14:paraId="6196F11E" w14:textId="77777777" w:rsidR="00752B7F" w:rsidRDefault="00752B7F" w:rsidP="00752B7F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>windows11</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>ではないでしょうか</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="198" w:author="愛徒 田中" w:date="2026-04-23T17:37:00Z" w:initials="愛田">
+    <w:p w14:paraId="0E73B434" w14:textId="77777777" w:rsidR="00EE071F" w:rsidRDefault="00EE071F" w:rsidP="00EE071F">
+      <w:pPr>
+        <w:pStyle w:val="ac"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="ab"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+        </w:rPr>
+        <w:t>修正させていただきました。</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+</w:comments>

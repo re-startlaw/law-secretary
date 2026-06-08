@@ -8,14 +8,36 @@
 ## 監視フォルダ
 `/Users/kometaninaoki/Library/CloudStorage/GoogleDrive-n.kometani@re-startlaw.com/マイドライブ/共有用/06_分類依頼`
 
+## 作業順序（必須）
+自動（`secretary.py`）は **三段構え**で分類する。手動分類が必要なケースでも同じ順序を守る。
+
+1. **外形分類**（無料・常に最初）
+   - `rename_file` で確定ファイル名（`YYMMDD_書類名`）に正規化。
+   - `classify_file` で送信者・件名・ファイル名から判定。
+
+2. **送信者メアド学習**（無料・自動）
+   - `build_sender_email_index` が保存ログのC列(送信者)→E列(移動先) を毎回走査して `SENDER_EMAIL_TO_CLIENT` を自動で補強する。
+   - 同一メアドが複数依頼者にマップされた場合は曖昧として除外。
+   - 手動で `SENDER_EMAIL_TO_CLIENT` に追補する必要はない（特殊ケースのみコードに残す）。
+
+3. **LLM内容分類**（有料・外形で決まらないファイルのみ）
+   - `classify_by_content` が `scripts/extract_text.py` で **1回だけ** 中身を抽出し、Anthropic API (Claude Sonnet 4.6) に投げて `canonical_filename` / `dest_relative_path` / `accounting_category` / `reasoning` / `confidence` を同時決定。
+   - **「中身を読んだら、その同一読み込み内で名前・保存先・勘定・根拠をすべて決める」**。2回読み禁止。
+   - 低信頼・不正パス・抽出失敗 → `分からなかった` フォルダへ。
+   - 推定根拠は保存ログのL列（対応事項）に `LLM推定: ...` で記録される。
+
+4. 移動 → スプレッドシート更新（`保存ログ`）→ 通知メール。
+
+注: Anthropic API には依頼者情報を含むメタデータと抽出テキスト先頭3000字程度を送信する（米谷弁護士承認済み）。APIキーは `~/law-secretary/secrets/.env` の `ANTHROPIC_API_KEY`。
+
 ## Unicode whitespace警告の扱い
 - 人名・フォルダ名の空白は維持し、`_` への置換は行わない。
 
-### Cursor の「source evaluates arguments as shell code」確認を避ける（必須）
-- Shell 提案に **`source` / `.`（ドットコマンド）を書かない**（venv は `venv/bin/python` を直接使う、スクリプトは `bash script.sh` など）。
+### shell code評価に関する確認を避ける（必須）
+- シェル提案に **`source` / `.`（ドットコマンド）を書かない**（venv は `venv/bin/python` を直接使う、スクリプトは `bash script.sh` など）。
 
-### Cursor の「Contains Unicode whitespace」確認を避ける（必須）
-**Bash ツールの `command` に U+3000（全角スペース）・U+00A0（NBSP）等を1文字でも含めない**。含めた瞬間に Cursor が毎回確認を出す。依頼者フォルダ名は保持する（`_` 置換は禁止）ので、必ず下記の迂回手順を使う。
+### Unicode whitespace確認を避ける（必須）
+**シェルコマンド文字列に U+3000（全角スペース）・U+00A0（NBSP）等を1文字でも含めない**。実行環境によって確認ダイアログや誤解釈が発生する。依頼者フォルダ名は保持する（`_` 置換は禁止）ので、必ず下記の迂回手順を使う。
 
 **禁止パターン（過去に警告を出した実例）**
 - `osascript <<'EOF' ... folder "す　鈴木七海" ... EOF`（Finderの `tell` 構文で依頼者名直書き）
@@ -24,8 +46,8 @@
 - `grep $'　' file`（シェル文字列リテラルに全角スペース）
 
 **推奨手順**
-1. **一覧・中身の確認**は Glob / Read ツールを第一選択にする。Bash の `ls` `cat` `find` は使わない。
-2. ターミナル操作が必要なときは `Write` で `.cursor/shell_path_utf8.txt` にパスを書き出し（1行目=主対象、2行目=副対象）、ASCII だけのコマンドで `scripts/path_ops.py` を呼ぶ:
+1. **一覧・中身の確認**はCodexのファイル検索・閲覧機能（例：`rg`、ファイル読み取り）を第一選択にする。ターミナルで `ls` `cat` `find` を直接使うのは避ける。
+2. ターミナル操作が必要なときは `.codex/shell_path_utf8.txt` にパスを書き出し（1行目=主対象、2行目=副対象）、ASCII だけのコマンドで `scripts/path_ops.py` を呼ぶ。旧環境との互換用に `.cursor/shell_path_utf8.txt` も利用可:
    - `venv/bin/python scripts/path_ops.py ls` — 1行目ディレクトリの一覧
    - `venv/bin/python scripts/path_ops.py open` — 全行を `open`
    - `venv/bin/python scripts/path_ops.py cp` — 1→2行でコピー
@@ -33,9 +55,9 @@
    - `venv/bin/python scripts/path_ops.py stat` — 存在/種別/サイズ
    - `venv/bin/python scripts/path_ops.py glob '*.docx'` — パターンは ASCII のみ
 3. 既存の `scripts/list_path_from_file.py` は互換用途で利用可。
-4. 複雑な処理（複数ファイル処理・正規表現等）は `scripts/` 以下に個別 Python スクリプトを作成し、**日本語パスはスクリプト内のリテラルに閉じ込める**。Bash で呼ぶときは `venv/bin/python scripts/xxx.py` のように ASCII のみにする。
+4. 複雑な処理（複数ファイル処理・正規表現等）は `scripts/` 以下に個別 Python スクリプトを作成し、**日本語パスはスクリプト内のリテラルに閉じ込める**。シェルで呼ぶときは `venv/bin/python scripts/xxx.py` のように ASCII のみにする。
 5. 正規表現で Unicode 空白を扱うときは **必ずエスケープ**（`　`, ` `）。リテラル貼り付けはしない。
-6. 別フォルダを見るときは `.cursor/shell_path_utf8.txt` を上書きしてから再実行する。
+6. 別フォルダを見るときは `.codex/shell_path_utf8.txt` を上書きしてから再実行する。
 
 ### ダイアログが出たとき
 - 上記を踏まえても確認が出た場合は、共有用・事件記録・分類依頼由来のパスとして `Yes` で続行してよい。
@@ -48,10 +70,24 @@
 
 ## 振り分け判断ルール
 - ファイル名・送信者・メールタイトルから依頼者名と書類種別を判断する
+- **送信者から依頼者が一意に推定できる場合**（表示名・メールアドレス・過去の保存ログと整合する場合など）は、「不明」「分からなかった」にせず事件記録（または経理）へ振り分ける。**推定した場合は通知本文かスプレッドシートの対応事項に、根拠を一言書く**（例：`送信者表示名が依頼者フォルダ名と一致`）。
+- メアド→依頼者の対応は `build_sender_email_index` が保存ログから自動学習する。**手動で `SENDER_EMAIL_TO_CLIENT` に追補する必要は基本的に無い**。固定したい特殊ケース（社内メアド→特定依頼者など）のみコードに残す。同一ドメインで複数依頼者があるドメインは `SENDER_DOMAIN_TO_CLIENT` に登録しない。
 - 刑事案件は該当サブフォルダへ
 - 民事案件は該当サブフォルダへ
 - 判断できない場合・不要なファイルは `pre_trash` へ
-- 判断に迷う場合は米谷尚起に確認する
+- **複数候補があり取り違えリスクが残る場合のみ**、米谷尚起に確認する
+
+## 「分からなかった」ファイルの報告運用（必須）
+自動分類で `06_分類依頼/分からなかった/` に落ちたファイルを米谷弁護士へ報告するときは、次の順で対応する。
+
+1. **必ず中身を読み込んで判断材料を提示する**。`scripts/extract_text.py` の `extract_text()` で本文を抽出し、
+   報告には「内容の要約・登場する固有名詞（依頼者名／会社名／事件番号等）・推定できる候補フォルダ」を添える。
+   外形（ファイル名・送信者・件名）だけで返さない。
+2. **中身を抽出しても判断材料すら得られないファイル**（手書きスキャン・文字化け・OCR不能・画像のみ等）は、
+   米谷弁護士が**直接開いて確認できるよう Driveのリンクを報告に添付**する。
+   - リンクは `secretary.py` の `resolve_drive_folder_id()` → `fetch_drive_file_meta()` で得た `webViewLink` を使う。
+   - 取得できないときは `build_drive_link_from_id()`、最終フォールバックは `drive_search_url()`。
+3. リンクを提示したうえで、振り分け先の指示を仰ぐ（憶測で `pre_trash` や誤フォルダに入れない）。
 
 ## フォルダ構造（刑事案件）
 - `01_選任関係`

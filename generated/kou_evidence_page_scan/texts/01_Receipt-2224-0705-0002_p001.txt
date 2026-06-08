@@ -1,0 +1,92 @@
+
+
+[embedded]
+ 
+Page 1 of 1
+Receipt
+Invoice number
+BYCLIMMX-0001
+Receipt number 2224-0705-0002
+Date paid
+June 4, 2026
+OpenAI OpCo, LLC
+1455 3rd Street
+San Francisco, California 94158
+United States
+ar@openai.com
+JP TRN T3700150133253
+Bill to
+米谷尚起
+〒170-6012
+東京都
+豊島区
+東池袋３丁目１
+Japan
+n.kometani@re-startlaw.com
+¥8,470 paid on June 4, 2026
+Description
+Qty
+Unit price
+Tax
+Amount
+ChatGPT Business Subscription (per seat)
+Jun 4–Jul 4, 2026
+2
+¥3,850
+10%
+¥7,700
+Subtotal
+¥7,700
+Total excluding tax
+¥7,700
+JCT - Japan (10% on ¥7,700)
+¥770
+Total
+¥8,470
+Amount paid
+¥8,470
+Payment history
+Payment method
+Date
+Amount paid
+Receipt number
+Visa - 2619
+June 4, 2026
+¥8,470
+2224-0705-
+0002
+ 
+
+
+[ocr]
+Lee a
+Receipt                   OpenAl
+Invoice number BYCLIMMX-0001
+Receipt number 2224-0705-0002
+Date paid         June 4, 2026
+OpenAI OpCo, LLC                                   Bill to
+1455 3rd Street                                       米谷尚起
+San Francisco, California 94158                       7170-6012
+United States                                         東京都
+ar@openai.com                                           豊島区
+JP TRN T3700150133253                              東池袋3丁目1
+
+Japan
+n.kometani@re-startlaw.com
+¥8,470 paid on June 4, 2026
+Description                                                                                  Qty        Unit price         Tax         Amount
+ChatGPT Business Subscription (per seat)                                                    2         ¥3,850        10%         ¥7,700
+Jun 4-Jul 4, 2026
+Subtotal                                                           ¥7,700
+Total excluding tax                                          ¥7,700
+JCT - Japan (10% on ¥7,700)                                   ¥770
+Total                                                               ¥8,470
+Amount paid                                                ¥8,470
+Payment history
+Payment method                                                                          Date                         Amount paid                       Receipt number
+Visa - 2619                                                          June 4, 2026         ¥8,470                      2224-0705-
+0002
+Page 1 of 1
+
+[crop]
+OpenAl
