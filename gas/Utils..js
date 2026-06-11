@@ -327,44 +327,25 @@ function normalizeStringArray_(value, maxItems, maxLength) {
  * AI出力を固定フォーマットでGmail下書き本文にする
  */
 function formatDraftBody_(parsed, rawResponse, riskProfile) {
-  const warning = [
-    '※以下はAI作成の下書きです。送信前に【要入力】【要回答】を削除・修正してください。',
-    '※法律判断・事件方針・見通し・金額・期限は必ず確認してください。'
-  ].join('\n');
-
   if (!parsed || typeof parsed !== 'object') {
+    // 解析失敗時は送信せず確認用。誤送信防止のため明示する
     return [
-      warning,
-      '',
-      `【相手種別】${riskProfile.label}`,
-      '',
-      '【要確認】',
-      'AI出力をJSONとして解析できませんでした。以下は送信せず、内容確認用として扱ってください。',
+      '※AI出力をJSONとして解析できませんでした。送信せず内容を確認してください。',
       '',
       '【AI出力】',
       String(rawResponse || '').substring(0, 2000)
     ].join('\n');
   }
 
-  const memo = normalizeStringArray_(parsed.memo, 3, 120);
   const placeholders = normalizeStringArray_(parsed.placeholders, 10, 120);
   const riskFlags = normalizeStringArray_(parsed.riskFlags, 10, 160);
-  const draft = String(parsed.draft || '').trim();
+  const draft = String(parsed.draft || '').trim()
+    || 'ご連絡ありがとうございます。\n内容を確認のうえ、改めてご連絡いたします。';
 
-  const parts = [
-    warning,
-    '',
-    `【相手種別】${riskProfile.label}`
-  ];
+  // そのまま送れる本文＋署名をクリーンに出力する。
+  const parts = [draft, '', '米谷尚起'];
 
-  if (memo.length > 0) {
-    parts.push('', '【相手の要望メモ】');
-    memo.forEach((item) => parts.push(`- ${item}`));
-  }
-
-  parts.push('', '【返信本文案】');
-  parts.push(draft || 'ご連絡ありがとうございます。\n内容を確認のうえ、改めてご連絡いたします。');
-
+  // AIが未確定箇所・リスクを検出したときだけ、本文・署名の下に注記として残す。
   if (placeholders.length > 0) {
     parts.push('', '【要入力】');
     placeholders.forEach((item) => parts.push(`- ${item}`));
