@@ -172,3 +172,144 @@ def test_reindex_disabled_returns_403(indexed_client):
     client, _, _ = indexed_client
     r = client.post("/api/cases/ic/reindex", headers={"X-Kiroku-Viewer": "1"})
     assert r.status_code == 403
+
+
+# --- フェーズ2: 注釈 / メタ / 書き出し / 孤児注釈 -----------------------
+
+CSRF = {"X-Kiroku-Viewer": "1"}
+
+
+def _real_pdf(path: Path, n_pages: int = 1):
+    from pypdf import PdfWriter
+    w = PdfWriter()
+    for _ in range(n_pages):
+        w.add_blank_page(width=595, height=842)
+    with path.open("wb") as f:
+        w.write(f)
+
+
+@pytest.fixture
+def anno_client(tmp_path: Path):
+    case_dir = tmp_path / "acase"
+    case_dir.mkdir()
+    _real_pdf(case_dir / "甲1 書面.pdf", 2)
+    server.CONFIG = {
+        "cases": {"a": {"id": "a", "name": "注釈事件", "path": case_dir, "reindex": False}},
+        "display_names": {},
+    }
+    server._listing_cache.clear()
+    client = TestClient(server.app, base_url="http://127.0.0.1:8788")
+    sha = next(d["sha256"] for d in client.get("/api/cases/a/documents").json()["documents"])
+    return client, sha, case_dir
+
+
+def test_annotation_put_get_roundtrip(anno_client):
+    client, sha, _ = anno_client
+    ann = {"id": "x1", "type": "rect", "page": 1, "rect": [10, 20, 100, 80], "color": "#ff0000"}
+    r = client.put(f"/api/cases/a/annotations/{sha}", headers=CSRF,
+                   json={"base_updated_at": "", "annotations": [ann]})
+    assert r.status_code == 200
+    got = client.get(f"/api/cases/a/annotations/{sha}").json()
+    assert len(got["annotations"]) == 1
+    a = got["annotations"][0]
+    assert a["type"] == "rect" and a["_editable"] is True
+
+
+def test_annotation_optimistic_lock_409(anno_client):
+    client, sha, _ = anno_client
+    r1 = client.put(f"/api/cases/a/annotations/{sha}", headers=CSRF,
+                    json={"base_updated_at": "", "annotations": []})
+    stored = r1.json()["updated_at"]
+    # 古い base_updated_at で再PUT → 409
+    r2 = client.put(f"/api/cases/a/annotations/{sha}", headers=CSRF,
+                    json={"base_updated_at": "2000-01-01T00:00:00+00:00", "annotations": []})
+    assert r2.status_code == 409
+    # 正しい base なら成功
+    r3 = client.put(f"/api/cases/a/annotations/{sha}", headers=CSRF,
+                    json={"base_updated_at": stored, "annotations": []})
+    assert r3.status_code == 200
+
+
+def test_annotation_persists_across_reindex(anno_client):
+    """sha256キーなので索引再生成相当でも注釈は同一文書に残る（D2）。"""
+    client, sha, _ = anno_client
+    ann = {"id": "p1", "type": "note", "page": 1, "point": [50, 700], "text": "重要"}
+    client.put(f"/api/cases/a/annotations/{sha}", headers=CSRF,
+               json={"base_updated_at": "", "annotations": [ann]})
+    server._listing_cache.clear()  # 再索引相当でキャッシュ破棄
+    got = client.get(f"/api/cases/a/annotations/{sha}").json()
+    assert got["annotations"][0]["text"] == "重要"
+
+
+def test_meta_memo_and_category(anno_client):
+    client, sha, _ = anno_client
+    r = client.put(f"/api/cases/a/meta/{sha}", headers=CSRF,
+                   json={"memo": "メモ書き", "category": "訴訟書類", "cho_offset": 44})
+    assert r.status_code == 200
+    docs = client.get("/api/cases/a/documents").json()["documents"]
+    d = next(x for x in docs if x["sha256"] == sha)
+    assert d["memo"] == "メモ書き"
+    assert d["category"] == "訴訟書類"
+    assert d["cho_offset"] == 44
+
+
+def test_has_annotations_flag(anno_client):
+    client, sha, _ = anno_client
+    client.put(f"/api/cases/a/annotations/{sha}", headers=CSRF,
+               json={"base_updated_at": "", "annotations": [{"id": "1", "type": "rect", "page": 1, "rect": [0, 0, 1, 1]}]})
+    docs = client.get("/api/cases/a/documents").json()["documents"]
+    d = next(x for x in docs if x["sha256"] == sha)
+    assert d["has_annotations"] is True
+
+
+def test_export_bakes_annotations(anno_client):
+    client, sha, _ = anno_client
+    anns = [
+        {"id": "r", "type": "rect", "page": 1, "rect": [50, 50, 200, 150], "color": "#ff0000"},
+        {"id": "t", "type": "text", "page": 2, "point": [60, 700], "text": "注記テスト"},
+    ]
+    client.put(f"/api/cases/a/annotations/{sha}", headers=CSRF,
+               json={"base_updated_at": "", "annotations": anns})
+    r = client.get(f"/api/cases/a/export/{sha}")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:4] == b"%PDF"
+    # ページ指定（1ページのみ）
+    r2 = client.get(f"/api/cases/a/export/{sha}", params={"pages": "1"})
+    from pypdf import PdfReader
+    import io
+    assert len(PdfReader(io.BytesIO(r2.content)).pages) == 1
+
+
+def test_orphan_and_relink(anno_client):
+    client, sha, case_dir = anno_client
+    orphan_sha = "f" * 64
+    # documents に無い sha の注釈を作る
+    client.put(f"/api/cases/a/annotations/{orphan_sha}", headers=CSRF,
+               json={"base_updated_at": "", "annotations": [{"id": "o", "type": "rect", "page": 1, "rect": [0, 0, 1, 1]}]})
+    orphans = client.get("/api/cases/a/orphan-annotations").json()["orphans"]
+    assert any(o["sha256"] == orphan_sha for o in orphans)
+    # 実在文書へ紐付け直す
+    r = client.post(f"/api/cases/a/annotations/{orphan_sha}/relink", headers=CSRF,
+                    json={"target_sha": sha})
+    assert r.status_code == 200
+    got = client.get(f"/api/cases/a/annotations/{sha}").json()
+    assert any(a["id"] == "o" for a in got["annotations"])
+    # 孤児は解消
+    orphans2 = client.get("/api/cases/a/orphan-annotations").json()["orphans"]
+    assert not any(o["sha256"] == orphan_sha for o in orphans2)
+
+
+def test_other_user_annotations_readonly(anno_client, monkeypatch):
+    client, sha, case_dir = anno_client
+    # 別ユーザーの注釈ファイルを直接配置
+    import json as _json
+    other_dir = case_dir / "_index" / "annotations" / "otheruser"
+    other_dir.mkdir(parents=True)
+    (other_dir / f"{sha}.json").write_text(
+        _json.dumps({"updated_at": "2026-01-01T00:00:00+00:00",
+                     "annotations": [{"id": "z", "type": "rect", "page": 1, "rect": [0, 0, 5, 5]}]}),
+        encoding="utf-8")
+    got = client.get(f"/api/cases/a/annotations/{sha}").json()
+    other = [a for a in got["annotations"] if a["_user"] == "otheruser"]
+    assert other and other[0]["_editable"] is False

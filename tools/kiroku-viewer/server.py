@@ -15,16 +15,20 @@ from __future__ import annotations
 
 import getpass
 import json
+import logging
 import mimetypes
 import os
+import re
 import sqlite3
 import sys
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Body, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+log = logging.getLogger("kiroku-viewer")
 
 # scripts/evidence_index.py のヘルパーを再利用する。
 HERE = Path(__file__).resolve().parent
@@ -46,6 +50,13 @@ ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 CSRF_HEADER = "x-kiroku-viewer"
 INDEX_DIR_NAME = "_index"
 EXPORT_REL = f"{INDEX_DIR_NAME}/export/evidence_index.sqlite"
+ANNOTATIONS_DIR = "annotations"
+VIEWER_META_DIR = "viewer_meta"
+SHA_RE = re.compile(r"^[0-9a-f]{64}\.json$")
+USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+META_FIELDS = ("memo", "category", "cho_offset", "rotation", "evidence_no")
+# 他ユーザー注釈の色分け（自ユーザーは固定色、他は順に割当）。
+USER_COLORS = ["#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be123c"]
 MEDIA_EXTS = {".mp4", ".mov", ".m4a", ".jpg", ".jpeg", ".png"}
 OPENABLE_EXTS = MEDIA_EXTS | {".pdf"}
 OCR_LOW_CONFIDENCE = 60.0
@@ -92,6 +103,138 @@ def current_user() -> str:
 
 def display_name(config: dict, user: str) -> str:
     return config["display_names"].get(user, user)
+
+
+def now_iso() -> str:
+    return ei.now_iso()
+
+
+# --------------------------------------------------------------------------
+# 注釈・メタの永続化（D8 座標・D9 規律）
+# --------------------------------------------------------------------------
+
+def atomic_write_json(path: Path, data) -> None:
+    """`.tmp`→`os.replace` のアトミック書き込み（D9）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def validate_sha(sha256: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise HTTPException(status_code=400, detail="invalid sha256")
+    return sha256
+
+
+def annotations_dir(case: dict, user: str) -> Path:
+    if not USER_RE.match(user):
+        raise HTTPException(status_code=400, detail="invalid user")
+    return case["path"] / INDEX_DIR_NAME / ANNOTATIONS_DIR / user
+
+
+def annotation_file(case: dict, user: str, sha256: str) -> Path:
+    return annotations_dir(case, user) / f"{validate_sha(sha256)}.json"
+
+
+def iter_annotation_users(case: dict):
+    base = case["path"] / INDEX_DIR_NAME / ANNOTATIONS_DIR
+    if not base.is_dir():
+        return
+    for child in base.iterdir():
+        if child.is_dir() and USER_RE.match(child.name):
+            yield child.name
+
+
+def read_annotations(case: dict, sha256: str, current: str) -> dict:
+    """全ユーザーの注釈をマージして返す（読みはマージ・D9）。
+
+    自ユーザー分は editable=True、他ユーザー分は表示のみ（色分け）。
+    Drive 競合コピー等、厳密パターンに合わないファイルは無視してログ警告。
+    """
+    validate_sha(sha256)
+    merged: list[dict] = []
+    own = {"updated_at": "", "annotations": []}
+    color_idx = 0
+    for user in sorted(iter_annotation_users(case)):
+        fpath = annotations_dir(case, user) / f"{sha256}.json"
+        if not fpath.exists():
+            continue
+        if not SHA_RE.match(fpath.name):
+            log.warning("ignoring non-conforming annotation file: %s", fpath)
+            continue
+        try:
+            payload = json.loads(fpath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            log.warning("unreadable annotation file: %s", fpath)
+            continue
+        anns = payload.get("annotations", [])
+        is_own = user == current
+        color = "#2563eb" if is_own else USER_COLORS[color_idx % len(USER_COLORS)]
+        if not is_own:
+            color_idx += 1
+        for a in anns:
+            item = dict(a)
+            item["_user"] = user
+            item["_user_display"] = display_name(CONFIG, user)
+            item["_editable"] = is_own
+            if not is_own and "color" not in item:
+                item["color"] = color
+            merged.append(item)
+        if is_own:
+            own = payload
+    return {"annotations": merged, "own_updated_at": own.get("updated_at", "")}
+
+
+def read_merged_meta(case: dict) -> dict:
+    """全ユーザーの viewer_meta をマージ（同一sha・同一フィールドは新しい方／D9）。"""
+    base = case["path"] / INDEX_DIR_NAME / VIEWER_META_DIR
+    result: dict[str, dict] = {}
+    if not base.is_dir():
+        return result
+    for fpath in base.glob("*.json"):
+        if not USER_RE.match(fpath.stem):
+            log.warning("ignoring non-conforming meta file: %s", fpath)
+            continue
+        try:
+            data = json.loads(fpath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            log.warning("unreadable meta file: %s", fpath)
+            continue
+        for sha, fields in data.items():
+            if not re.fullmatch(r"[0-9a-f]{64}", sha):
+                continue
+            cur = result.setdefault(sha, {})
+            for field in META_FIELDS:
+                if field not in fields:
+                    continue
+                ts = fields.get(f"{field}_at", "")
+                prev_ts = cur.get(f"{field}_at", "")
+                if ts >= prev_ts:
+                    cur[field] = fields[field]
+                    cur[f"{field}_at"] = ts
+    return result
+
+
+def annotated_shas(case: dict) -> set[str]:
+    """注釈ファイルが存在し中身が空でない sha256 の集合。"""
+    base = case["path"] / INDEX_DIR_NAME / ANNOTATIONS_DIR
+    found: set[str] = set()
+    if not base.is_dir():
+        return found
+    for user in iter_annotation_users(case):
+        for fpath in annotations_dir(case, user).iterdir():
+            if not SHA_RE.match(fpath.name):
+                if fpath.is_file():
+                    log.warning("ignoring non-conforming annotation file: %s", fpath)
+                continue
+            try:
+                payload = json.loads(fpath.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if payload.get("annotations"):
+                found.add(fpath.stem)
+    return found
 
 
 # --------------------------------------------------------------------------
@@ -185,6 +328,19 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
     docs: list[dict] = []
     sha_to_path: dict[str, Path] = {}
     indexed_rel: set[str] = set()
+    meta = read_merged_meta(case)
+    anno = annotated_shas(case)
+
+    def apply_meta(doc: dict) -> dict:
+        m = meta.get(doc["sha256"], {})
+        if m.get("evidence_no"):
+            doc["evidence_no"] = m["evidence_no"]
+        doc["category"] = m.get("category", "")
+        doc["memo"] = m.get("memo", "")
+        doc["cho_offset"] = m.get("cho_offset", 0)
+        doc["rotation"] = m.get("rotation", 0)
+        doc["has_annotations"] = doc["sha256"] in anno
+        return doc
 
     db_path = cached_db_path(case)
     if db_path is not None:
@@ -216,7 +372,7 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
                 (min_conf is not None and min_conf < OCR_LOW_CONFIDENCE)
                 or r["extract_status"] == ei.STATUS_NEEDS_REVIEW
             )
-            docs.append(
+            docs.append(apply_meta(
                 {
                     "sha256": r["sha256"],
                     "evidence_no": r["evidence_no"],
@@ -230,10 +386,8 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
                     "indexed": True,
                     "ocr_low_confidence": bool(low_conf),
                     "ocr_pages": r["ocr_pages"],
-                    "memo": "",            # フェーズ2: viewer_meta から
-                    "has_annotations": False,  # フェーズ2: annotations から
                 }
-            )
+            ))
 
     # 未索引ファイル（PDF・メディア）をマージ（D5）。
     for fpath in iter_case_files(case):
@@ -245,7 +399,7 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
         ext = fpath.suffix.lower()
         kind = "pdf" if ext == ".pdf" else "media"
         evidence_no, title, doc_date, author = ei.parse_name_only(fpath.stem)
-        docs.append(
+        docs.append(apply_meta(
             {
                 "sha256": sha,
                 "evidence_no": evidence_no,
@@ -259,10 +413,8 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
                 "indexed": False,
                 "ocr_low_confidence": False,
                 "ocr_pages": 0,
-                "memo": "",
-                "has_annotations": False,
             }
-        )
+        ))
 
     docs.sort(key=lambda d: ei.evidence_sort_key(d["evidence_no"]))
     return docs, sha_to_path
@@ -532,6 +684,270 @@ def api_reindex_status(case_id: str):
         return {"running": False, "ran": False}
     running = proc.poll() is None
     return {"running": running, "ran": True, "returncode": proc.returncode}
+
+
+# --------------------------------------------------------------------------
+# 注釈（D8 座標・D9 規律）
+# --------------------------------------------------------------------------
+
+@app.get("/api/cases/{case_id}/annotations/{sha256}")
+def api_get_annotations(case_id: str, sha256: str):
+    case = get_case(CONFIG, case_id)
+    user = current_user()
+    data = read_annotations(case, sha256, user)
+    return {**data, "user": user, "user_display": display_name(CONFIG, user)}
+
+
+@app.put("/api/cases/{case_id}/annotations/{sha256}")
+def api_put_annotations(case_id: str, sha256: str, payload: dict = Body(...)):
+    """自ユーザーの注釈のみ保存（楽観ロック409・アトミック書き込み／D9）。"""
+    case = get_case(CONFIG, case_id)
+    user = current_user()
+    validate_sha(sha256)
+    fpath = annotation_file(case, user, sha256)
+    stored_at = ""
+    if fpath.exists():
+        try:
+            stored_at = json.loads(fpath.read_text(encoding="utf-8")).get("updated_at", "")
+        except (OSError, json.JSONDecodeError):
+            stored_at = ""
+    base = payload.get("base_updated_at", "")
+    if stored_at and base and stored_at > base:
+        raise HTTPException(status_code=409, detail="annotations changed; reload required")
+    updated = now_iso()
+    anns = payload.get("annotations", [])
+    if not isinstance(anns, list):
+        raise HTTPException(status_code=400, detail="annotations must be a list")
+    # 他ユーザー用の表示フィールドは保存しない。
+    clean = [{k: v for k, v in a.items() if not k.startswith("_")} for a in anns]
+    atomic_write_json(fpath, {"updated_at": updated, "annotations": clean})
+    _listing_cache.pop(case_id, None)
+    return {"updated_at": updated, "count": len(clean)}
+
+
+# --------------------------------------------------------------------------
+# メタ（メモ・符号上書き・丁数オフセット・回転状態／D9）
+# --------------------------------------------------------------------------
+
+@app.put("/api/cases/{case_id}/meta/{sha256}")
+def api_put_meta(case_id: str, sha256: str, payload: dict = Body(...)):
+    case = get_case(CONFIG, case_id)
+    user = current_user()
+    validate_sha(sha256)
+    if not USER_RE.match(user):
+        raise HTTPException(status_code=400, detail="invalid user")
+    mfile = case["path"] / INDEX_DIR_NAME / VIEWER_META_DIR / f"{user}.json"
+    data = {}
+    if mfile.exists():
+        try:
+            data = json.loads(mfile.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+    entry = data.get(sha256, {})
+    ts = now_iso()
+    for field in META_FIELDS:
+        if field in payload:
+            entry[field] = payload[field]
+            entry[f"{field}_at"] = ts
+    data[sha256] = entry
+    atomic_write_json(mfile, data)
+    _listing_cache.pop(case_id, None)
+    return {"ok": True, "updated_at": ts}
+
+
+# --------------------------------------------------------------------------
+# 注釈込みPDF書き出し（D8 座標をそのまま焼き込み）
+# --------------------------------------------------------------------------
+
+def parse_pages_param(pages: str, total: int) -> set[int] | None:
+    if not pages:
+        return None
+    out: set[int] = set()
+    for part in pages.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                lo, hi = int(a), int(b)
+            except ValueError:
+                continue
+            out.update(range(max(1, lo), min(total, hi) + 1))
+        elif part:
+            try:
+                out.add(int(part))
+            except ValueError:
+                continue
+    return out or None
+
+
+@app.get("/api/cases/{case_id}/export/{sha256}")
+def api_export(case_id: str, sha256: str, pages: str = ""):
+    """注釈をPDF座標のまま焼き込んだPDFを返す（pypdf＋reportlab）。"""
+    case = get_case(CONFIG, case_id)
+    path = resolve_sha(case, sha256)
+    if path.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="not a pdf")
+    anns = read_annotations(case, sha256, current_user())["annotations"]
+    data = bake_annotations(path, anns, pages)
+    from urllib.parse import quote
+
+    fname = quote(path.stem + "_注釈付き.pdf")
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=export.pdf; filename*=UTF-8''{fname}"},
+    )
+
+
+def bake_annotations(pdf_path: Path, anns: list[dict], pages_param: str) -> bytes:
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    reader = PdfReader(str(pdf_path))
+    total = len(reader.pages)
+    keep = parse_pages_param(pages_param, total)
+    by_page: dict[int, list[dict]] = {}
+    for a in anns:
+        by_page.setdefault(int(a.get("page", 0)), []).append(a)
+
+    writer = PdfWriter()
+    for idx, page in enumerate(reader.pages, start=1):
+        if keep is not None and idx not in keep:
+            continue
+        wp = writer.add_page(page)  # 先にwriterへ付けてからmerge（pypdf推奨）
+        page_anns = by_page.get(idx, [])
+        if page_anns:
+            mb = wp.mediabox
+            w = float(mb.width)
+            h = float(mb.height)
+            buf = io.BytesIO()
+            c = rl_canvas.Canvas(buf, pagesize=(w, h))
+            for a in page_anns:
+                draw_annotation(c, a)
+            c.save()
+            buf.seek(0)
+            overlay = PdfReader(buf).pages[0]
+            wp.merge_page(overlay)
+
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def _rgb(color: str):
+    color = (color or "#cc0000").lstrip("#")
+    if len(color) != 6:
+        color = "cc0000"
+    return tuple(int(color[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def draw_annotation(c, a: dict) -> None:
+    """注釈をPDFユーザー空間（左下原点）にそのまま描画する（D8）。"""
+    t = a.get("type")
+    r, g, b = _rgb(a.get("color"))
+    c.setStrokeColorRGB(r, g, b)
+    c.setFillColorRGB(r, g, b)
+    c.setLineWidth(float(a.get("width", 2)))
+    if t == "rect":
+        x0, y0, x1, y1 = a["rect"]
+        c.setFillAlpha(0.0)
+        c.rect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0), stroke=1, fill=0)
+    elif t == "line":
+        (x0, y0), (x1, y1) = a["points"][0], a["points"][-1]
+        c.line(x0, y0, x1, y1)
+    elif t == "pen":
+        pts = a.get("points", [])
+        if len(pts) >= 2:
+            p = c.beginPath()
+            p.moveTo(pts[0][0], pts[0][1])
+            for x, y in pts[1:]:
+                p.lineTo(x, y)
+            c.drawPath(p, stroke=1, fill=0)
+    elif t in ("text", "comment", "note"):
+        x, y = annotation_anchor(a)
+        if t == "note":
+            c.setFont("Helvetica", 14)
+            c.drawString(x, y, "★")
+        txt = a.get("text", "")
+        if txt:
+            try:
+                from reportlab.pdfbase import pdfmetrics
+                from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+                pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
+                c.setFont("HeiseiKakuGo-W5", 10)
+            except Exception:
+                c.setFont("Helvetica", 10)
+            c.drawString(x + (14 if t == "note" else 0), y, txt)
+
+
+def annotation_anchor(a: dict):
+    if "rect" in a:
+        x0, y0, x1, y1 = a["rect"]
+        return min(x0, x1), max(y0, y1)
+    if "point" in a:
+        return a["point"][0], a["point"][1]
+    pts = a.get("points")
+    if pts:
+        return pts[0][0], pts[0][1]
+    return 36, 36
+
+
+# --------------------------------------------------------------------------
+# 孤児注釈（documents に無い sha256）と紐付け直し
+# --------------------------------------------------------------------------
+
+@app.get("/api/cases/{case_id}/orphan-annotations")
+def api_orphans(case_id: str):
+    case = get_case(CONFIG, case_id)
+    user = current_user()
+    docs, _ = get_listing(case)
+    known = {d["sha256"] for d in docs}
+    orphans = []
+    adir = annotations_dir(case, user)
+    if adir.is_dir():
+        for fpath in adir.iterdir():
+            if not SHA_RE.match(fpath.name):
+                continue
+            sha = fpath.stem
+            if sha in known:
+                continue
+            try:
+                payload = json.loads(fpath.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if payload.get("annotations"):
+                orphans.append({"sha256": sha, "count": len(payload["annotations"])})
+    return {"orphans": orphans, "user": user}
+
+
+@app.post("/api/cases/{case_id}/annotations/{sha256}/relink")
+def api_relink(case_id: str, sha256: str, payload: dict = Body(...)):
+    """孤児注釈を別文書(sha)へ紐付け直す（自ユーザー分のみ）。"""
+    case = get_case(CONFIG, case_id)
+    user = current_user()
+    validate_sha(sha256)
+    target = validate_sha(payload.get("target_sha", ""))
+    docs, _ = get_listing(case)
+    if target not in {d["sha256"] for d in docs}:
+        raise HTTPException(status_code=404, detail="target document not found")
+    src = annotation_file(case, user, sha256)
+    if not src.exists():
+        raise HTTPException(status_code=404, detail="source annotations not found")
+    src_data = json.loads(src.read_text(encoding="utf-8"))
+    dst = annotation_file(case, user, target)
+    dst_data = {"updated_at": "", "annotations": []}
+    if dst.exists():
+        try:
+            dst_data = json.loads(dst.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    merged = (dst_data.get("annotations", []) or []) + (src_data.get("annotations", []) or [])
+    atomic_write_json(dst, {"updated_at": now_iso(), "annotations": merged})
+    src.unlink()
+    _listing_cache.pop(case_id, None)
+    return {"ok": True, "moved": len(src_data.get("annotations", [])), "target": target}
 
 
 # 静的配信（SPA）。最後にマウントして API ルートを優先する。
