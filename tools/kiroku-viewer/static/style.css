@@ -1,0 +1,36 @@
+:root {
+  --bg: #f7f7f8;
+  --fg: #1d1d1f;
+  --muted: #6b6b70;
+  --border: #d8d8dc;
+  --accent: #2563eb;
+  --row-hover: #eef2ff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+}
+
+#topbar h1 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.placeholder {
+  color: var(--muted);
+  padding: 24px;
+}

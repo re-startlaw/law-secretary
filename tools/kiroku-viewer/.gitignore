@@ -1,0 +1,5 @@
+# 実体の事件パス設定はマシンローカル（雛形は cases.example.json）
+cases.json
+__pycache__/
+*.pyc
+.pytest_cache/

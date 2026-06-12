@@ -1,0 +1,8 @@
+# 記録ビューア サーバ依存（バージョン固定）
+fastapi==0.118.0
+starlette==0.48.0
+uvicorn==0.34.0
+# 索引・PDF処理は scripts/evidence_index.py と共通（PyMuPDF/pypdf/reportlab/pillow）
+# テスト
+pytest==8.4.1
+httpx==0.28.1

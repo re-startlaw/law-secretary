@@ -1,0 +1,15 @@
+{
+  "_comment": "このファイルは雛形。各Macで cases.json にコピーし、実事件フォルダのパスを設定する（cases.json は gitignore）。",
+  "cases": [
+    {
+      "id": "sample-case",
+      "name": "サンプル事件",
+      "path": "/Users/you/Library/CloudStorage/.../依頼者名[弁護革命system]/__Document__",
+      "reindex": false
+    }
+  ],
+  "display_names": {
+    "nsato": "佐藤",
+    "nkometani": "米谷"
+  }
+}
