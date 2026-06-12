@@ -138,4 +138,95 @@ th.sorted { color: var(--accent); }
 .viewer-close { margin-left: auto; }
 .viewer-body { padding: 16px; min-height: 80px; color: var(--muted); }
 
+.viewer-body button, .media-body button { margin-top: 10px; padding: 6px 12px; cursor: pointer; }
+
+/* ---- インラインビューア本体（1-C） ---- */
+.viewer-layout { display: flex; height: 620px; max-height: 78vh; }
+.viewer-side {
+  flex: 0 0 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: #f3f4f6;
+  border-right: 1px solid var(--border);
+  overflow: auto;
+}
+.side-btn {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.side-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.viewer-right { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; }
+.viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.tb-grp { display: inline-flex; align-items: center; gap: 4px; }
+.tb-btn {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tb-btn:hover { background: var(--row-hover); }
+.page-input { width: 44px; text-align: center; padding: 3px; border: 1px solid var(--border); border-radius: 5px; }
+.page-total, .zoom-label, .search-count { color: var(--muted); font-size: 12px; }
+.doc-search { padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px; font-size: 12px; }
+.tb-search { margin-left: auto; }
+
+.pdf-scroll { flex: 1 1 auto; overflow: auto; background: #525659; padding: 12px 0; }
+.pdf-page {
+  position: relative;
+  margin: 0 auto 12px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pdf-page.search-hit-page { outline: 3px solid #fbbf24; outline-offset: -3px; }
+.page-label { color: #cbd5e1; font-size: 13px; }
+.pdf-canvas { display: block; }
+
+.txt-view { flex: 1 1 auto; overflow: auto; background: #fff; padding: 12px 16px; }
+.txt-head { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.txt-body { white-space: pre-wrap; font-family: "Hiragino Sans", sans-serif; font-size: 13px; line-height: 1.7; margin: 0; }
+
+/* ---- テキスト検索タブ ---- */
+.search-panel { padding: 12px 16px; overflow: auto; }
+.search-bar { display: flex; gap: 8px; flex-wrap: wrap; }
+.search-bar input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.search-bar #ts-q { flex: 1 1 320px; }
+.search-bar #ts-filter { flex: 0 1 220px; }
+.search-bar button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; background: #fff; }
+.search-bar button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.search-help { color: var(--muted); font-size: 12px; margin: 6px 0; }
+.search-status { margin: 8px 0; color: var(--muted); }
+.search-results { display: flex; flex-direction: column; gap: 8px; }
+.result-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  background: #fff;
+}
+.result-card:hover { background: var(--row-hover); border-color: var(--accent); }
+.rc-head { margin-bottom: 4px; }
+.rc-page { color: var(--muted); font-size: 12px; margin-left: 6px; }
+.rc-snippet { color: #333; font-size: 13px; line-height: 1.6; }
+mark { background: #fde68a; color: inherit; padding: 0 1px; }
+
 .placeholder { color: var(--muted); padding: 24px; }

@@ -16,6 +16,7 @@ const state = {
   annoOnly: false,
   wareki: false,
   openSha: null,     // インライン展開中の文書
+  openPage: null,    // 検索から開いた場合の初期ページ
 };
 
 const EVIDENCE_TABS = [
@@ -211,9 +212,12 @@ function renderTable() {
       cell.className = "viewer-cell";
       exp.appendChild(cell);
       tbody.appendChild(exp);
+      const initialPage = state.openPage;
+      state.openPage = null;
       mountInlineViewer(d, cell, {
         caseId: state.caseId,
         documents: docs,
+        initialPage,
         onClose: () => {
           state.openSha = null;
           renderTable();
@@ -335,14 +339,126 @@ async function boot() {
 export const appState = state;
 export { loadDocuments };
 window.__appState = state;
-window.__openDoc = (sha) => {
+window.__openDoc = (sha, page) => {
   const d = state.documents.find((x) => x.sha256 === sha);
   if (!d) return;
   document.querySelector('.main-tab[data-tab="docs"]').click();
   state.openSha = sha;
+  state.openPage = page || null;
   state.evidenceTab = "all";
   renderEvidenceTabs();
   renderTable();
+};
+
+// ---- テキスト検索タブ -------------------------------------------------
+let searchTabBuilt = false;
+function buildSearchTab() {
+  const panel = document.getElementById("tab-search");
+  panel.innerHTML = "";
+  panel.classList.add("search-panel");
+
+  const bar = document.createElement("div");
+  bar.className = "search-bar";
+  const q = document.createElement("input");
+  q.type = "search";
+  q.id = "ts-q";
+  q.placeholder = "本文キーワード（スペース区切り＝OR検索）";
+  q.onkeydown = (e) => { if (e.key === "Enter") runSearch(); };
+  const filt = document.createElement("input");
+  filt.type = "search";
+  filt.id = "ts-filter";
+  filt.placeholder = "絞り込み（タイトル・符号）";
+  const run = document.createElement("button");
+  run.textContent = "検索実行";
+  run.className = "primary";
+  run.onclick = runSearch;
+  const clear = document.createElement("button");
+  clear.textContent = "× クリア";
+  clear.onclick = () => {
+    q.value = ""; filt.value = "";
+    document.getElementById("ts-results").innerHTML = "";
+    document.getElementById("ts-status").textContent = "";
+  };
+  bar.append(q, filt, run, clear);
+  panel.appendChild(bar);
+
+  const help = document.createElement("div");
+  help.className = "search-help";
+  help.textContent = "スペース区切りはOR検索。スニペットは正規化テキスト由来です（原文はビューアで確認）。";
+  panel.appendChild(help);
+
+  const status = document.createElement("div");
+  status.id = "ts-status";
+  status.className = "search-status";
+  panel.appendChild(status);
+
+  const results = document.createElement("div");
+  results.id = "ts-results";
+  results.className = "search-results";
+  panel.appendChild(results);
+}
+
+async function runSearch() {
+  const q = document.getElementById("ts-q").value.trim();
+  const filter = document.getElementById("ts-filter").value.trim();
+  const status = document.getElementById("ts-status");
+  const results = document.getElementById("ts-results");
+  results.innerHTML = "";
+  if (!q) { status.textContent = "キーワードを入力してください。"; return; }
+  status.textContent = "検索中…";
+  try {
+    const url = `/api/cases/${encodeURIComponent(state.caseId)}/search?` +
+      new URLSearchParams({ q, filter });
+    const res = await fetch(url);
+    const data = await res.json();
+    const hits = data.hits || [];
+    if (!data.indexed) {
+      status.textContent = "この事件は未索引です。索引を生成してください。";
+      return;
+    }
+    if (!hits.length) {
+      const lowOcr = state.documents.some((d) => d.ocr_low_confidence);
+      status.textContent = "0 件" + (lowOcr ? "（OCR低信頼の文書があります。原文の表記揺れで未ヒットの可能性）" : "");
+      return;
+    }
+    status.textContent = `${hits.length} 件`;
+    for (const h of hits) {
+      const card = document.createElement("div");
+      card.className = "result-card";
+      card.innerHTML =
+        `<div class="rc-head"><strong>${escapeHtml(h.evidence_no || "—")}</strong> ` +
+        `${escapeHtml(h.title)} <span class="rc-page">p.${h.page_no}</span></div>` +
+        `<div class="rc-snippet">${highlightSnippet(h.snippet, q)}</div>`;
+      card.onclick = () => window.__openDoc(h.sha256, h.page_no);
+      results.appendChild(card);
+    }
+  } catch (e) {
+    status.textContent = "検索エラー: " + e;
+  }
+}
+
+function highlightSnippet(snippet, query) {
+  let s = escapeHtml(snippet || "");
+  if (s.includes("[") && s.includes("]")) {
+    // FTS snippet のマーカー [..] を強調表示に変換。
+    s = s.replace(/\[/g, "<mark>").replace(/\]/g, "</mark>");
+  } else {
+    // LIKE フォールバックはクエリ語を強調。
+    for (const tok of query.split(/\s+/).filter(Boolean)) {
+      const re = new RegExp("(" + tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi");
+      s = s.replace(re, "<mark>$1</mark>");
+    }
+  }
+  return s;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+window.__initSearchTab = () => {
+  if (!searchTabBuilt) { buildSearchTab(); searchTabBuilt = true; }
+  document.getElementById("ts-q").focus();
 };
 
 boot();
