@@ -142,6 +142,7 @@ def open_db_ro(db_path: Path) -> sqlite3.Connection:
 # --------------------------------------------------------------------------
 
 _listing_cache: dict[str, tuple[float, list[dict], dict[str, Path]]] = {}
+_reindex_procs: dict = {}
 
 
 def safe_resolve(case: dict, rel_path: str) -> Path:
@@ -409,6 +410,124 @@ def api_pdf(case_id: str, sha256: str, request: Request):
         mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     )
     return range_response(path, request, ctype)
+
+
+@app.get("/api/cases/{case_id}/search")
+def api_search(case_id: str, q: str = "", filter: str = "", limit: int = 100):
+    """本文検索（D1）。snippet 付きでページ単位ヒットを返す。
+
+    filter はタイトル・符号への正規化部分一致で結果を絞り込む。
+    """
+    case = get_case(CONFIG, case_id)
+    db_path = cached_db_path(case)
+    if db_path is None or not q.strip():
+        return {"hits": [], "indexed": db_path is not None}
+    conn = open_db_ro(db_path)
+    try:
+        raw_limit = 500 if filter.strip() else limit
+        hits = ei.search_pages(conn, q, raw_limit)
+    finally:
+        conn.close()
+    if filter.strip():
+        nf = ei.normalize_for_search(filter)
+        hits = [
+            h for h in hits
+            if nf in ei.normalize_for_search(f"{h['evidence_no']} {h['title']}")
+        ]
+        hits = hits[:limit]
+    return {"hits": hits, "indexed": True}
+
+
+@app.get("/api/cases/{case_id}/text/{sha256}")
+def api_text(case_id: str, sha256: str, page: int | None = None):
+    """抽出テキスト（ページ単位／D6 の TXT 表示用）。"""
+    case = get_case(CONFIG, case_id)
+    db_path = cached_db_path(case)
+    if db_path is None:
+        return {"indexed": False, "page_count": 0, "pages": []}
+    conn = open_db_ro(db_path)
+    try:
+        doc = conn.execute(
+            "SELECT id, page_count FROM documents WHERE sha256 = ? LIMIT 1", (sha256,)
+        ).fetchone()
+        if doc is None:
+            return {"indexed": False, "page_count": 0, "pages": []}
+        doc_id = doc["id"]
+        page_count = doc["page_count"]
+        if page is not None:
+            row = conn.execute(
+                "SELECT page_no, text FROM pages WHERE document_id = ? AND page_no = ?",
+                (doc_id, page),
+            ).fetchone()
+            return {
+                "indexed": True,
+                "page_count": page_count,
+                "page_no": page,
+                "text": row["text"] if row else "",
+            }
+        rows = conn.execute(
+            "SELECT page_no, text FROM pages WHERE document_id = ? ORDER BY page_no",
+            (doc_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        "indexed": True,
+        "page_count": page_count,
+        "pages": [{"page_no": r["page_no"], "text": r["text"]} for r in rows],
+    }
+
+
+@app.post("/api/cases/{case_id}/open-file/{sha256}")
+def api_open_file(case_id: str, sha256: str):
+    """ファイルを既定アプリで開く（mp4 は QuickTime 等／D11 検証付き）。"""
+    case = get_case(CONFIG, case_id)
+    path = resolve_sha(case, sha256)
+    if path.suffix.lower() not in OPENABLE_EXTS:
+        raise HTTPException(status_code=403, detail="extension not allowed")
+    import subprocess
+
+    try:
+        subprocess.run(["open", str(path)], check=True)
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise HTTPException(status_code=500, detail=f"open failed: {exc}") from exc
+    return {"ok": True, "file_name": path.name}
+
+
+@app.post("/api/cases/{case_id}/reindex")
+def api_reindex(case_id: str):
+    """索引を再構築（evidence_index.py build をサブプロセス起動・多重起動拒否）。"""
+    case = get_case(CONFIG, case_id)
+    if not case["reindex"]:
+        raise HTTPException(status_code=403, detail="reindex disabled for this case")
+    proc = _reindex_procs.get(case_id)
+    if proc is not None and proc.poll() is None:
+        raise HTTPException(status_code=409, detail="reindex already running")
+    import subprocess
+
+    script = REPO_ROOT / "scripts" / "evidence_index.py"
+    cmd = [
+        sys.executable, str(script), "build", "--ocr",
+        "--evidence-dir", str(case["path"]),
+    ]
+    log_dir = CACHE_ROOT / case_id
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = (log_dir / "reindex.log").open("w", encoding="utf-8")
+    _reindex_procs[case_id] = subprocess.Popen(
+        cmd, stdout=log_file, stderr=subprocess.STDOUT
+    )
+    _listing_cache.pop(case_id, None)
+    return {"started": True}
+
+
+@app.get("/api/cases/{case_id}/reindex")
+def api_reindex_status(case_id: str):
+    get_case(CONFIG, case_id)
+    proc = _reindex_procs.get(case_id)
+    if proc is None:
+        return {"running": False, "ran": False}
+    running = proc.poll() is None
+    return {"running": running, "ran": True, "returncode": proc.returncode}
 
 
 # 静的配信（SPA）。最後にマウントして API ルートを優先する。
