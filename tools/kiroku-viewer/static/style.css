@@ -229,4 +229,51 @@ th.sorted { color: var(--accent); }
 .rc-snippet { color: #333; font-size: 13px; line-height: 1.6; }
 mark { background: #fde68a; color: inherit; padding: 0 1px; }
 
+/* ---- 注釈ツールバー・オーバーレイ（フェーズ2） ---- */
+.anno-toolbar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 5px 10px; background: #fff7ed; border-bottom: 1px solid var(--border);
+}
+.tool-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.color-wrap { gap: 3px; }
+.color-sw { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--border); cursor: pointer; padding: 0; }
+.color-sw.active { box-shadow: 0 0 0 2px var(--fg); }
+.anno-status { color: var(--muted); font-size: 12px; margin-left: auto; }
+.tb-label { color: var(--muted); font-size: 12px; }
+.cho-input { width: 52px; padding: 3px; border: 1px solid var(--border); border-radius: 5px; }
+
+.anno-layer { position: absolute; inset: 0; z-index: 2; }
+.pdf-scroll.anno-active .anno-layer { cursor: crosshair; }
+.anno-shape.own { cursor: pointer; }
+.anno-shape.selected rect, .anno-shape.selected line, .anno-shape.selected polyline { filter: drop-shadow(0 0 2px #000); }
+.anno-shape.selected text { text-decoration: underline; }
+.anno-text-label { paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+.anno-draft { opacity: 0.7; stroke-dasharray: 4 3; }
+
+/* ---- タブ表示（複数文書同時オープン） ---- */
+.open-tabs {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 5px 16px; background: #eef2ff; border-bottom: 1px solid var(--border);
+}
+.tabs-label { color: var(--muted); font-size: 12px; }
+.open-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #fff; border: 1px solid var(--accent); border-radius: 6px;
+  padding: 3px 8px; font-size: 12px; cursor: pointer; max-width: 240px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tab-close { border: none; background: none; cursor: pointer; color: var(--muted); font-size: 14px; padding: 0 2px; }
+
+/* ---- 孤児注釈バー ---- */
+.orphan-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 16px; background: #fef3c7; color: #92400e;
+  border-bottom: 1px solid #fcd34d; font-size: 12px;
+}
+.orphan-bar button { padding: 3px 10px; cursor: pointer; }
+
+/* ---- メモ編集 ---- */
+.col-memo { min-width: 120px; }
+.memo-edit { width: 100%; padding: 2px 4px; border: 1px solid var(--accent); border-radius: 4px; }
+
 .placeholder { color: var(--muted); padding: 24px; }

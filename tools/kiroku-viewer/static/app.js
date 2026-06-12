@@ -15,8 +15,8 @@ const state = {
   filter: "",
   annoOnly: false,
   wareki: false,
-  openSha: null,     // インライン展開中の文書
-  openPage: null,    // 検索から開いた場合の初期ページ
+  openShas: [],      // インライン展開中の文書（複数同時オープン＝タブ表示）
+  openPages: {},     // sha -> 初期ページ（検索から開いた場合）
 };
 
 const EVIDENCE_TABS = [
@@ -179,7 +179,7 @@ function renderTable() {
   tbody.innerHTML = "";
   for (const d of docs) {
     const row = document.createElement("tr");
-    row.className = "doc-row" + (state.openSha === d.sha256 ? " open" : "");
+    row.className = "doc-row" + (state.openShas.includes(d.sha256) ? " open" : "");
     row.dataset.sha = d.sha256;
 
     row.appendChild(td(String(d.id), "col-id"));
@@ -198,13 +198,16 @@ function renderTable() {
 
     row.appendChild(td(formatDate(d.document_date, state.wareki), "col-date"));
     row.appendChild(td(d.author || "", "col-author"));
-    row.appendChild(td(d.memo || "", "col-memo"));
+    row.appendChild(buildMemoCell(d));
     row.appendChild(td(d.page_count == null ? "" : String(d.page_count), "col-page"));
 
-    row.onclick = () => toggleRow(d, row);
+    row.onclick = (e) => {
+      if (e.target.closest(".memo-edit")) return;  // メモ編集中はトグルしない
+      toggleRow(d, row);
+    };
     tbody.appendChild(row);
 
-    if (state.openSha === d.sha256) {
+    if (state.openShas.includes(d.sha256)) {
       const exp = document.createElement("tr");
       exp.className = "viewer-row";
       const cell = document.createElement("td");
@@ -212,19 +215,26 @@ function renderTable() {
       cell.className = "viewer-cell";
       exp.appendChild(cell);
       tbody.appendChild(exp);
-      const initialPage = state.openPage;
-      state.openPage = null;
+      const initialPage = state.openPages[d.sha256];
+      delete state.openPages[d.sha256];
       mountInlineViewer(d, cell, {
         caseId: state.caseId,
         documents: docs,
         initialPage,
-        onClose: () => {
-          state.openSha = null;
+        onClose: () => { closeDoc(d.sha256); },
+        onNavigate: (sha) => {
+          const i = state.openShas.indexOf(d.sha256);
+          if (i >= 0) state.openShas[i] = sha; else state.openShas.push(sha);
+          renderTabs();
           renderTable();
         },
-        onNavigate: (sha) => {
-          state.openSha = sha;
-          renderTable();
+        onAnnotationsSaved: (sha, has) => {
+          const doc = state.documents.find((x) => x.sha256 === sha);
+          if (doc) { doc.has_annotations = has; renderEvidenceTabs(); updateRowBadges(); }
+        },
+        onMetaSaved: (sha, fields) => {
+          const doc = state.documents.find((x) => x.sha256 === sha);
+          if (doc) Object.assign(doc, fields);
         },
       });
     }
@@ -232,11 +242,114 @@ function renderTable() {
 }
 
 function toggleRow(d, row) {
-  state.openSha = state.openSha === d.sha256 ? null : d.sha256;
+  const i = state.openShas.indexOf(d.sha256);
+  if (i >= 0) state.openShas.splice(i, 1);
+  else state.openShas.push(d.sha256);
+  renderTabs();
   renderTable();
-  if (state.openSha) {
+  if (state.openShas.includes(d.sha256)) {
     const el = document.querySelector(`tr.doc-row[data-sha="${d.sha256}"]`);
     if (el) el.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function closeDoc(sha) {
+  const i = state.openShas.indexOf(sha);
+  if (i >= 0) state.openShas.splice(i, 1);
+  renderTabs();
+  renderTable();
+}
+
+// 開いている文書のタブ表示（複数同時オープン）
+function renderTabs() {
+  let bar = document.getElementById("open-tabs");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "open-tabs";
+    bar.className = "open-tabs";
+    const wrap = document.getElementById("docs-table-wrap");
+    wrap.parentNode.insertBefore(bar, wrap);
+  }
+  bar.innerHTML = "";
+  if (!state.openShas.length) { bar.style.display = "none"; return; }
+  bar.style.display = "";
+  const lbl = document.createElement("span");
+  lbl.className = "tabs-label";
+  lbl.textContent = "タブ表示:";
+  bar.appendChild(lbl);
+  for (const sha of state.openShas) {
+    const d = state.documents.find((x) => x.sha256 === sha);
+    if (!d) continue;
+    const tab = document.createElement("span");
+    tab.className = "open-tab";
+    tab.textContent = `${d.evidence_no || "—"} ${d.title}`;
+    tab.title = "クリックで該当文書へスクロール";
+    tab.onclick = () => {
+      const el = document.querySelector(`tr.doc-row[data-sha="${sha}"]`);
+      if (el) el.scrollIntoView({ block: "center" });
+    };
+    const x = document.createElement("button");
+    x.className = "tab-close";
+    x.textContent = "×";
+    x.onclick = (e) => { e.stopPropagation(); closeDoc(sha); };
+    tab.appendChild(x);
+    bar.appendChild(tab);
+  }
+}
+
+// メモ列インライン編集（ダブルクリックで編集→PUT /meta）
+function buildMemoCell(d) {
+  const cell = td("", "col-memo");
+  const span = document.createElement("span");
+  span.className = "memo-text";
+  span.textContent = d.memo || "";
+  cell.appendChild(span);
+  cell.title = "ダブルクリックで編集";
+  cell.ondblclick = (e) => {
+    e.stopPropagation();
+    const input = document.createElement("input");
+    input.className = "memo-edit";
+    input.value = d.memo || "";
+    cell.innerHTML = "";
+    cell.appendChild(input);
+    input.focus();
+    const commit = async () => {
+      const val = input.value;
+      d.memo = val;
+      cell.innerHTML = "";
+      const s = document.createElement("span");
+      s.className = "memo-text";
+      s.textContent = val;
+      cell.appendChild(s);
+      await saveMeta(d.sha256, { memo: val });
+    };
+    input.onblur = commit;
+    input.onkeydown = (ev) => {
+      if (ev.key === "Enter") input.blur();
+      else if (ev.key === "Escape") { cell.innerHTML = ""; cell.appendChild(span); }
+    };
+  };
+  return cell;
+}
+
+async function saveMeta(sha, fields) {
+  try {
+    await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/meta/${sha}`, {
+      method: "PUT",
+      headers: { "X-Kiroku-Viewer": "1", "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    });
+  } catch (e) { /* noop */ }
+}
+
+// 注釈バッジだけを最小更新（フル再描画を避ける）
+function updateRowBadges() {
+  for (const d of state.documents) {
+    const row = document.querySelector(`tr.doc-row[data-sha="${d.sha256}"] .col-title`);
+    if (!row) continue;
+    const has = row.querySelector(".badge-anno");
+    if (d.has_annotations && !has) row.appendChild(badge("注釈", "badge-anno"));
+    else if (!d.has_annotations && has) has.remove();
   }
 }
 
@@ -267,9 +380,63 @@ async function loadDocuments() {
   docs.sort((a, b) => cmpArr(evidenceSortKey(a.evidence_no), evidenceSortKey(b.evidence_no)));
   docs.forEach((d, i) => (d.id = i + 1));
   state.documents = docs;
-  state.openSha = null;
+  state.openShas = [];
+  state.openPages = {};
+  renderTabs();
   renderEvidenceTabs();
   renderTable();
+  checkOrphans();
+}
+
+// 孤児注釈（documents に無い sha の注釈）を検出して案内バーを出す
+async function checkOrphans() {
+  let bar = document.getElementById("orphan-bar");
+  try {
+    const res = await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/orphan-annotations`);
+    const data = await res.json();
+    const orphans = data.orphans || [];
+    if (!orphans.length) { if (bar) bar.remove(); return; }
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "orphan-bar";
+      bar.className = "orphan-bar";
+      const wrap = document.getElementById("docs-table-wrap");
+      wrap.parentNode.insertBefore(bar, wrap);
+    }
+    const total = orphans.reduce((s, o) => s + o.count, 0);
+    bar.innerHTML = `⚠ 紐付け先が見つからない注釈が ${orphans.length} 文書分（計${total}件）あります。` +
+      `ファイル名変更や差し替えの可能性。`;
+    const btn = document.createElement("button");
+    btn.textContent = "紐付け直す…";
+    btn.onclick = () => openRelinkDialog(orphans);
+    bar.appendChild(btn);
+  } catch (e) { if (bar) bar.remove(); }
+}
+
+function openRelinkDialog(orphans) {
+  const o = orphans[0];
+  const docList = state.documents
+    .map((d, i) => `${i + 1}: ${d.evidence_no || "—"} ${d.title}`)
+    .join("\n");
+  const ans = prompt(
+    `孤児注釈（${o.count}件, sha=${o.sha256.slice(0, 12)}…）の紐付け先を番号で選択:\n\n${docList}`
+  );
+  const idx = parseInt(ans, 10);
+  if (!idx || idx < 1 || idx > state.documents.length) return;
+  const target = state.documents[idx - 1];
+  relink(o.sha256, target.sha256);
+}
+
+async function relink(sha, targetSha) {
+  try {
+    const res = await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/annotations/${sha}/relink`, {
+      method: "POST",
+      headers: { "X-Kiroku-Viewer": "1", "Content-Type": "application/json" },
+      body: JSON.stringify({ target_sha: targetSha }),
+    });
+    if (!res.ok) { alert("紐付けに失敗しました"); return; }
+    await loadDocuments();
+  } catch (e) { alert("紐付けエラー: " + e); }
 }
 
 // ---- タブ・コントロール ------------------------------------------------
@@ -343,9 +510,10 @@ window.__openDoc = (sha, page) => {
   const d = state.documents.find((x) => x.sha256 === sha);
   if (!d) return;
   document.querySelector('.main-tab[data-tab="docs"]').click();
-  state.openSha = sha;
-  state.openPage = page || null;
+  if (!state.openShas.includes(sha)) state.openShas.push(sha);
+  if (page) state.openPages[sha] = page;
   state.evidenceTab = "all";
+  renderTabs();
   renderEvidenceTabs();
   renderTable();
 };
