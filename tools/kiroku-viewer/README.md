@@ -17,17 +17,18 @@ bash tools/kiroku-viewer/start.sh
    ```
    venv/bin/pip install -r tools/kiroku-viewer/requirements.txt
    ```
-2. `cases.json` を作成（雛形をコピーして事件フォルダのパスを設定）:
+2. 起動してブラウザで開く:
    ```
-   cp tools/kiroku-viewer/cases.example.json tools/kiroku-viewer/cases.json
+   bash tools/kiroku-viewer/start.sh
    ```
-   `path` は弁護革命の `__Document__` フォルダ（素のPDF/MP4）を指す。
-   `cases.json` はマシンローカル（gitignore）。
-3. 索引生成（米谷Macで実行）:
-   ```
-   venv/bin/python scripts/evidence_index.py build --ocr --evidence-dir "<事件フォルダ>"
-   ```
-   `{事件フォルダ}/_index/export/evidence_index.sqlite` が生成される。
+   初回は `cases.json` が無い旨の警告が表示されるが起動は続行する。
+3. ブラウザの「**＋ 追加**」ボタンから事件フォルダを登録する。
+   - 「フォルダを選択…」で弁護革命の `__Document__` フォルダを選択（または手入力）。
+   - 「追加後すぐ索引を作成」はONにしておくと索引が自動生成される。
+   - 「このMacで索引の作成・更新を許可する」は**米谷のMacのみON**。
+     **佐藤さんのMacではOFF**にして登録する（2台が並行build するのを防ぐ）。
+
+`cases.json` はマシンローカル（gitignore）なので、2台で別々に登録する。
 
 ## オフライン利用（外出先・必須設定）
 

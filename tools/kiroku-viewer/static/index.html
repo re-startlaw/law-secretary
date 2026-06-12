@@ -10,7 +10,10 @@
 <body>
   <header id="topbar">
     <h1>記録ビューア</h1>
+    <span class="picker-label">事件:</span>
     <select id="case-picker" aria-label="事件選択"></select>
+    <button id="add-case-btn" class="tb-btn" title="事件を追加">＋ 追加</button>
+    <button id="manage-case-btn" class="tb-btn" title="事件の管理">⚙</button>
     <nav id="main-tabs">
       <button class="main-tab active" data-tab="docs">文書DB</button>
       <button class="main-tab" data-tab="search">テキスト検索</button>
@@ -42,6 +45,7 @@
     </section>
   </main>
 
+  <div id="modal-root"></div>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

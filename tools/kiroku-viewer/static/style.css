@@ -277,3 +277,54 @@ mark { background: #fde68a; color: inherit; padding: 0 1px; }
 .memo-edit { width: 100%; padding: 2px 4px; border: 1px solid var(--accent); border-radius: 4px; }
 
 .placeholder { color: var(--muted); padding: 24px; }
+
+/* ---- 事件ピッカー周辺 ---- */
+.picker-label { color: var(--muted); font-size: 13px; }
+#add-case-btn, #manage-case-btn { font-size: 13px; }
+
+/* ---- 未索引案内バー ---- */
+.no-index-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 16px; background: #fff7ed; color: #92400e;
+  border-bottom: 1px solid #fcd34d; font-size: 12px;
+}
+.no-index-bar button { padding: 3px 10px; cursor: pointer; }
+
+/* ---- 再索引ステータス ---- */
+.reindex-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: 6px; font-size: 12px;
+  background: #fef3c7; color: #92400e;
+}
+.reindex-status.success { background: #d1fae5; color: #065f46; }
+.reindex-status.error { background: #fee2e2; color: #991b1b; }
+
+/* ---- モーダル ---- */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  background: #fff; border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  padding: 24px 28px; min-width: 420px; max-width: 92vw; max-height: 90vh;
+  overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+}
+.modal h2 { margin: 0; font-size: 16px; }
+.modal-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.modal-row label { flex: 0 0 120px; font-size: 13px; color: var(--muted); }
+.modal-row input[type="text"] {
+  flex: 1 1 200px; padding: 5px 8px; border: 1px solid var(--border);
+  border-radius: 6px; font-size: 13px;
+}
+.modal-row input[type="checkbox"] { margin: 0; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.modal-actions button { padding: 6px 16px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: #fff; font-size: 13px; }
+.modal-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.modal-error { color: #991b1b; font-size: 12px; background: #fee2e2; border-radius: 6px; padding: 6px 10px; }
+.modal-hint { color: var(--muted); font-size: 12px; }
+
+/* ---- 事件管理テーブル ---- */
+.case-list { width: 100%; border-collapse: collapse; font-size: 13px; }
+.case-list th, .case-list td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.case-list th { background: #fafafa; font-weight: 600; }
+.case-list td button { padding: 2px 8px; font-size: 12px; cursor: pointer; border: 1px solid var(--border); border-radius: 5px; background: #fff; }

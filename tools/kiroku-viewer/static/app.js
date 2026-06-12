@@ -382,6 +382,28 @@ async function loadDocuments() {
   state.documents = docs;
   state.openShas = [];
   state.openPages = {};
+
+  // 現事件の reindex/has_index を取得してボタン・案内バーを更新。
+  const picker = document.getElementById("case-picker");
+  const cRes = await fetch("/api/cases");
+  const cData = await cRes.json();
+  const currentCase = (cData.cases || []).find((c) => c.id === state.caseId);
+  setupReindexBtn(currentCase);
+  showNoIndexBar(currentCase);
+
+  // リロード後に索引作成中だった場合はポーリングを再開。
+  if (currentCase && currentCase.reindex) {
+    try {
+      const rRes = await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/reindex`);
+      const rData = await rRes.json();
+      if (rData.running && !_reindexPollTimer) {
+        showReindexStatus("索引作成中…（ブラウザを閉じても構いません）", "");
+        updateReindexBtn(true);
+        _reindexPollTimer = setTimeout(pollReindex, 3000);
+      }
+    } catch (_e) { /* noop */ }
+  }
+
   renderTabs();
   renderEvidenceTabs();
   renderTable();
@@ -439,6 +461,451 @@ async function relink(sha, targetSha) {
   } catch (e) { alert("紐付けエラー: " + e); }
 }
 
+// ---- モーダルシステム --------------------------------------------------
+let _activeModal = null;
+function openModal(content) {
+  closeModal();
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.onclick = (e) => { if (e.target === backdrop) closeModal(); };
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.appendChild(content);
+  backdrop.appendChild(modal);
+  document.getElementById("modal-root").appendChild(backdrop);
+  _activeModal = backdrop;
+}
+function closeModal() {
+  if (_activeModal) { _activeModal.remove(); _activeModal = null; }
+}
+
+// ---- 事件ピッカー再構築 -----------------------------------------------
+function rebuildPicker(cases) {
+  const picker = document.getElementById("case-picker");
+  picker.innerHTML = "";
+  for (const c of cases) {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    picker.appendChild(opt);
+  }
+}
+
+// ---- 再索引ボタン・ポーリング ------------------------------------------
+let _reindexPollTimer = null;
+let _currentCaseMeta = null;  // {reindex, has_index} of current case
+
+function showReindexStatus(msg, kind) {
+  let el = document.getElementById("reindex-status");
+  if (!el) {
+    el = document.createElement("span");
+    el.id = "reindex-status";
+    el.className = "reindex-status";
+    const toolbar = document.querySelector(".docs-toolbar");
+    if (toolbar) toolbar.appendChild(el);
+  }
+  el.textContent = msg;
+  el.className = "reindex-status" + (kind ? " " + kind : "");
+  if (kind === "success" || kind === "error") {
+    setTimeout(() => { if (el) el.remove(); }, 5000);
+  }
+}
+
+function clearReindexStatus() {
+  const el = document.getElementById("reindex-status");
+  if (el) el.remove();
+}
+
+async function pollReindex() {
+  try {
+    const res = await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/reindex`);
+    const data = await res.json();
+    if (!data.running) {
+      clearTimeout(_reindexPollTimer);
+      _reindexPollTimer = null;
+      updateReindexBtn(false);
+      if (data.ran) {
+        if (data.returncode === 0) {
+          showReindexStatus("索引作成完了", "success");
+          if (_currentCaseMeta) _currentCaseMeta.has_index = true;
+          removeNoIndexBar();
+          await loadDocuments();
+        } else {
+          // 失敗: ログを取得して表示
+          try {
+            const lr = await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/reindex/log`);
+            const ld = await lr.json();
+            showReindexStatus(`索引作成に失敗しました（終了コード ${data.returncode}）:\n${ld.log || ""}`, "error");
+          } catch (_e) {
+            showReindexStatus(`索引作成に失敗しました（終了コード ${data.returncode}）`, "error");
+          }
+        }
+      }
+      return;
+    }
+    showReindexStatus("索引作成中…（ブラウザを閉じても構いません）", "");
+    updateReindexBtn(true);
+    _reindexPollTimer = setTimeout(pollReindex, 3000);
+  } catch (_e) {
+    _reindexPollTimer = setTimeout(pollReindex, 3000);
+  }
+}
+
+function updateReindexBtn(running) {
+  const btn = document.getElementById("reindex-btn");
+  if (!btn) return;
+  btn.disabled = running;
+  btn.textContent = running ? "索引作成中…" : "再索引";
+}
+
+async function startReindex() {
+  try {
+    const res = await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/reindex`, {
+      method: "POST", headers: { "X-Kiroku-Viewer": "1" },
+    });
+    if (res.status === 409) {
+      // 既に実行中 → ポーリングのみ
+    } else if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      alert(d.detail || "索引作成に失敗しました");
+      return;
+    }
+    showReindexStatus("索引作成中…（ブラウザを閉じても構いません）", "");
+    updateReindexBtn(true);
+    if (!_reindexPollTimer) _reindexPollTimer = setTimeout(pollReindex, 3000);
+  } catch (e) {
+    alert("索引作成エラー: " + e);
+  }
+}
+
+function setupReindexBtn(caseMeta) {
+  _currentCaseMeta = caseMeta;
+  // 既存ボタンを削除してから再生成。
+  const old = document.getElementById("reindex-btn");
+  if (old) old.remove();
+  if (!caseMeta || !caseMeta.reindex) return;
+  const btn = document.createElement("button");
+  btn.id = "reindex-btn";
+  btn.className = "tb-btn";
+  btn.textContent = "再索引";
+  btn.onclick = () => startReindex();
+  const toolbar = document.querySelector(".docs-toolbar");
+  const countEl = document.getElementById("doc-count");
+  if (toolbar && countEl) toolbar.insertBefore(btn, countEl);
+}
+
+function removeNoIndexBar() {
+  const bar = document.getElementById("no-index-bar");
+  if (bar) bar.remove();
+}
+
+function showNoIndexBar(caseMeta) {
+  removeNoIndexBar();
+  if (!caseMeta || caseMeta.has_index) return;
+  const bar = document.createElement("div");
+  bar.id = "no-index-bar";
+  bar.className = "no-index-bar";
+  bar.textContent = "この事件は未索引です（検索不可・閲覧のみ）。";
+  if (caseMeta.reindex) {
+    const btn = document.createElement("button");
+    btn.textContent = "索引を作成";
+    btn.onclick = () => startReindex();
+    bar.appendChild(btn);
+  }
+  const wrap = document.getElementById("docs-table-wrap");
+  if (wrap) wrap.parentNode.insertBefore(bar, wrap);
+}
+
+// ---- 事件追加モーダル --------------------------------------------------
+async function openAddCaseModal() {
+  const frag = document.createDocumentFragment();
+
+  const h2 = document.createElement("h2");
+  h2.textContent = "事件を追加";
+  frag.appendChild(h2);
+
+  // 事件名
+  const nameRow = document.createElement("div");
+  nameRow.className = "modal-row";
+  const nameLbl = document.createElement("label");
+  nameLbl.textContent = "事件名";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.placeholder = "空欄の場合はフォルダ名から自動設定";
+  nameRow.append(nameLbl, nameInput);
+  frag.appendChild(nameRow);
+
+  // フォルダパス
+  const pathRow = document.createElement("div");
+  pathRow.className = "modal-row";
+  const pathLbl = document.createElement("label");
+  pathLbl.textContent = "フォルダパス";
+  const pathInput = document.createElement("input");
+  pathInput.type = "text";
+  pathInput.placeholder = "/path/to/__Document__";
+  const pickBtn = document.createElement("button");
+  pickBtn.className = "tb-btn";
+  pickBtn.textContent = "フォルダを選択…";
+  pathRow.append(pathLbl, pathInput, pickBtn);
+  frag.appendChild(pathRow);
+
+  const pickHint = document.createElement("div");
+  pickHint.className = "modal-hint";
+  pickHint.textContent = "";
+  frag.appendChild(pickHint);
+
+  // ☑ 即時索引
+  const idxRow = document.createElement("div");
+  idxRow.className = "modal-row";
+  const idxChk = document.createElement("input");
+  idxChk.type = "checkbox";
+  idxChk.checked = true;
+  const idxLbl = document.createElement("label");
+  idxLbl.style.flex = "1";
+  idxLbl.textContent = "追加後すぐ索引を作成（OCR・件数によっては数十分〜数時間かかります）";
+  idxLbl.prepend(idxChk);
+  idxRow.appendChild(idxLbl);
+  frag.appendChild(idxRow);
+
+  // ☑ reindex 許可
+  const reindexRow = document.createElement("div");
+  reindexRow.className = "modal-row";
+  const reindexChk = document.createElement("input");
+  reindexChk.type = "checkbox";
+  reindexChk.checked = true;
+  const reindexLbl = document.createElement("label");
+  reindexLbl.style.flex = "1";
+  reindexLbl.textContent = "このMacで索引の作成・更新を許可する（通常は米谷のMacのみON。佐藤さんのMacではOFF）";
+  reindexLbl.prepend(reindexChk);
+  reindexRow.appendChild(reindexLbl);
+  frag.appendChild(reindexRow);
+
+  const errEl = document.createElement("div");
+  errEl.className = "modal-error";
+  errEl.style.display = "none";
+  frag.appendChild(errEl);
+
+  const actions = document.createElement("div");
+  actions.className = "modal-actions";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "キャンセル";
+  cancelBtn.onclick = () => closeModal();
+  const addBtn = document.createElement("button");
+  addBtn.className = "primary";
+  addBtn.textContent = "追加";
+  actions.append(cancelBtn, addBtn);
+  frag.appendChild(actions);
+
+  // フォルダ選択ボタン
+  pickBtn.onclick = async () => {
+    pickBtn.disabled = true;
+    pickHint.textContent = "Finderのダイアログを確認してください（他のウィンドウの背面に出ることがあります）";
+    try {
+      const res = await fetch("/api/pick-folder", {
+        method: "POST", headers: { "X-Kiroku-Viewer": "1" },
+      });
+      if (res.status === 409) {
+        pickHint.textContent = "フォルダ選択ダイアログが既に開いています。";
+        return;
+      }
+      const data = await res.json();
+      if (data.cancelled) {
+        pickHint.textContent = "フォルダ選択がキャンセルされました。";
+      } else {
+        pathInput.value = data.path || "";
+        pickHint.textContent = "";
+      }
+    } catch (e) {
+      pickHint.textContent = "エラー: " + e;
+    } finally {
+      pickBtn.disabled = false;
+    }
+  };
+
+  // 追加ボタン
+  addBtn.onclick = async () => {
+    errEl.style.display = "none";
+    addBtn.disabled = true;
+    try {
+      const res = await fetch("/api/cases", {
+        method: "POST",
+        headers: { "X-Kiroku-Viewer": "1", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: nameInput.value.trim(),
+          path: pathInput.value.trim(),
+          reindex: reindexChk.checked,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = data.detail || "エラーが発生しました";
+        errEl.style.display = "";
+        return;
+      }
+      closeModal();
+      // ピッカー再構築 → 新事件に切替
+      const cRes = await fetch("/api/cases");
+      const cData = await cRes.json();
+      rebuildPicker(cData.cases || []);
+      const picker = document.getElementById("case-picker");
+      picker.value = data.id;
+      state.caseId = data.id;
+      await loadDocuments();
+      // 索引チェック & 即時索引
+      if (idxChk.checked && !data.has_index && data.reindex) {
+        await startReindex();
+      }
+    } catch (e) {
+      errEl.textContent = "通信エラー: " + e;
+      errEl.style.display = "";
+    } finally {
+      addBtn.disabled = false;
+    }
+  };
+
+  const wrapper = document.createElement("div");
+  wrapper.appendChild(frag);
+  openModal(wrapper);
+  nameInput.focus();
+}
+
+// ---- 事件管理モーダル --------------------------------------------------
+async function openManageCasesModal() {
+  let casesData = [];
+  try {
+    const res = await fetch("/api/cases");
+    const data = await res.json();
+    casesData = data.cases || [];
+  } catch (e) {
+    alert("事件一覧の取得に失敗しました: " + e);
+    return;
+  }
+
+  const renderManageModal = () => {
+    const wrapper = document.createElement("div");
+
+    const h2 = document.createElement("h2");
+    h2.textContent = "事件の管理";
+    wrapper.appendChild(h2);
+
+    if (!casesData.length) {
+      const p = document.createElement("div");
+      p.className = "modal-hint";
+      p.textContent = "登録されている事件はありません。";
+      wrapper.appendChild(p);
+    } else {
+      const tbl = document.createElement("table");
+      tbl.className = "case-list";
+      const thead = tbl.createTHead();
+      const hRow = thead.insertRow();
+      for (const h of ["事件名", "パス", "索引", "索引許可", "操作"]) {
+        const th = document.createElement("th");
+        th.textContent = h;
+        hRow.appendChild(th);
+      }
+      const tbody = tbl.createTBody();
+      for (const c of casesData) {
+        const tr = tbody.insertRow();
+        tr.insertCell().textContent = c.name;
+        const pathCell = tr.insertCell();
+        pathCell.textContent = c.path;
+        pathCell.style.cssText = "max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--muted)";
+        tr.insertCell().textContent = c.has_index ? "あり" : "なし";
+        tr.insertCell().textContent = c.reindex ? "ON" : "OFF";
+        const opCell = tr.insertCell();
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "削除";
+        delBtn.onclick = () => confirmDelete(c);
+        opCell.appendChild(delBtn);
+      }
+      wrapper.appendChild(tbl);
+    }
+
+    const note = document.createElement("div");
+    note.className = "modal-hint";
+    note.textContent = "削除はアプリからの登録解除のみです。フォルダ・索引・注釈ファイルは削除されません。";
+    wrapper.appendChild(note);
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "閉じる";
+    closeBtn.onclick = () => closeModal();
+    actions.appendChild(closeBtn);
+    wrapper.appendChild(actions);
+
+    return wrapper;
+  };
+
+  const confirmDelete = (c) => {
+    const wrapper = document.createElement("div");
+    const h2 = document.createElement("h2");
+    h2.textContent = "事件の登録を解除";
+    wrapper.appendChild(h2);
+    const msg = document.createElement("div");
+    msg.innerHTML = `「<strong>${escapeHtml(c.name)}</strong>」の登録を解除します。<br>` +
+      "<strong>フォルダ・索引・注釈ファイルは削除されません。</strong>";
+    wrapper.appendChild(msg);
+
+    const errEl = document.createElement("div");
+    errEl.className = "modal-error";
+    errEl.style.display = "none";
+    wrapper.appendChild(errEl);
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const backBtn = document.createElement("button");
+    backBtn.textContent = "戻る";
+    backBtn.onclick = () => openModal(renderManageModal());
+    const okBtn = document.createElement("button");
+    okBtn.className = "primary";
+    okBtn.textContent = "登録解除";
+    okBtn.onclick = async () => {
+      okBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/cases/${encodeURIComponent(c.id)}`, {
+          method: "DELETE", headers: { "X-Kiroku-Viewer": "1" },
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          errEl.textContent = data.detail || "削除に失敗しました";
+          errEl.style.display = "";
+          okBtn.disabled = false;
+          return;
+        }
+        // ピッカー再構築
+        const cRes = await fetch("/api/cases");
+        const cData = await cRes.json();
+        const newCases = cData.cases || [];
+        rebuildPicker(newCases);
+        casesData = newCases;
+        if (!newCases.length) {
+          closeModal();
+          openAddCaseModal();
+        } else {
+          const picker = document.getElementById("case-picker");
+          // 削除した事件が表示中なら先頭へ切替
+          if (state.caseId === c.id) {
+            state.caseId = newCases[0].id;
+            picker.value = state.caseId;
+            await loadDocuments();
+          }
+          openModal(renderManageModal());
+        }
+      } catch (e) {
+        errEl.textContent = "通信エラー: " + e;
+        errEl.style.display = "";
+        okBtn.disabled = false;
+      }
+    };
+    actions.append(backBtn, okBtn);
+    wrapper.appendChild(actions);
+    openModal(wrapper);
+  };
+
+  openModal(renderManageModal());
+}
+
 // ---- タブ・コントロール ------------------------------------------------
 function setupMainTabs() {
   document.querySelectorAll(".main-tab").forEach((btn) => {
@@ -471,30 +938,35 @@ function setupControls() {
 async function boot() {
   setupMainTabs();
   setupControls();
+
+  // ＋追加・⚙管理 ボタン
+  document.getElementById("add-case-btn").onclick = () => openAddCaseModal();
+  document.getElementById("manage-case-btn").onclick = () => openManageCasesModal();
+
+  const picker = document.getElementById("case-picker");
+  picker.onchange = () => {
+    state.caseId = picker.value;
+    // ポーリングは事件切替でリセット
+    if (_reindexPollTimer) { clearTimeout(_reindexPollTimer); _reindexPollTimer = null; }
+    clearReindexStatus();
+    loadDocuments();
+  };
+
   try {
     const res = await fetch("/api/cases");
     const data = await res.json();
     state.user = data.user_display || data.user || "";
     document.getElementById("user-badge").textContent = state.user ? `👤 ${state.user}` : "";
     const cases = data.cases || [];
-    const picker = document.getElementById("case-picker");
-    picker.innerHTML = "";
-    for (const c of cases) {
-      const opt = document.createElement("option");
-      opt.value = c.id;
-      opt.textContent = c.name;
-      picker.appendChild(opt);
-    }
-    picker.onchange = () => {
-      state.caseId = picker.value;
-      loadDocuments();
-    };
+    rebuildPicker(cases);
     if (cases.length) {
       state.caseId = cases[0].id;
       await loadDocuments();
     } else {
+      // 0件 → 追加モーダルを自動で開く
       document.querySelector("#docs-table tbody").innerHTML =
-        '<tr><td class="placeholder">cases.json に事件が登録されていません。</td></tr>';
+        '<tr><td class="placeholder">事件が登録されていません。「＋ 追加」から登録してください。</td></tr>';
+      openAddCaseModal();
     }
   } catch (e) {
     document.querySelector("#docs-table tbody").innerHTML =

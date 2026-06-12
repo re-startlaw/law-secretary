@@ -16,9 +16,7 @@ if [ ! -x "$PYTHON" ]; then
 fi
 
 if [ ! -f "$HERE/cases.json" ]; then
-  echo "cases.json がありません。cases.example.json をコピーして事件フォルダのパスを設定してください:" >&2
-  echo "  cp \"$HERE/cases.example.json\" \"$HERE/cases.json\"" >&2
-  exit 1
+  echo "警告: cases.json がありません。ブラウザの「＋ 追加」から事件を登録してください。" >&2
 fi
 
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then

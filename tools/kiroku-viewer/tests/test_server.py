@@ -313,3 +313,230 @@ def test_other_user_annotations_readonly(anno_client, monkeypatch):
     got = client.get(f"/api/cases/a/annotations/{sha}").json()
     other = [a for a in got["annotations"] if a["_user"] == "otheruser"]
     assert other and other[0]["_editable"] is False
+
+
+# ---- 事件管理API（追加・削除・フォルダ選択・再索引ログ） -----------------
+
+CSRF = {"X-Kiroku-Viewer": "1"}
+
+
+@pytest.fixture
+def mgmt_client(tmp_path: Path, monkeypatch):
+    """実 cases.json を保護しつつ管理APIをテストするフィクスチャ。"""
+    monkeypatch.setattr(server, "CONFIG_PATH", tmp_path / "cases.json")
+    server.CONFIG = {
+        "cases": {
+            "existing": {
+                "id": "existing",
+                "name": "既存事件",
+                "path": (tmp_path / "existing_case").resolve(),
+                "reindex": False,
+            }
+        },
+        "display_names": {"nsato": "佐藤"},
+    }
+    (tmp_path / "existing_case").mkdir()
+    server._listing_cache.clear()
+    return TestClient(server.app, base_url="http://127.0.0.1:8788"), tmp_path
+
+
+def test_add_case_ok(mgmt_client, tmp_path):
+    client, tdir = mgmt_client
+    new_case = tdir / "new_case"
+    new_case.mkdir()
+    r = client.post("/api/cases", headers=CSRF, json={"name": "新事件", "path": str(new_case), "reindex": False})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "新事件"
+    cid = data["id"]
+    # GET /api/cases に現れること
+    cases = client.get("/api/cases").json()["cases"]
+    assert any(c["id"] == cid for c in cases)
+    # cases.json に永続化されていること
+    cfg_path = tdir / "cases.json"
+    assert cfg_path.exists()
+    import json as _json
+    saved = _json.loads(cfg_path.read_text())
+    assert any(c["id"] == cid for c in saved["cases"])
+
+
+def test_add_case_nonexistent_path(mgmt_client):
+    client, tdir = mgmt_client
+    r = client.post("/api/cases", headers=CSRF,
+                    json={"name": "", "path": str(tdir / "no_such_dir"), "reindex": False})
+    assert r.status_code == 400
+
+
+def test_add_case_duplicate(mgmt_client):
+    client, tdir = mgmt_client
+    new_case = tdir / "dup_case"
+    new_case.mkdir()
+    r1 = client.post("/api/cases", headers=CSRF, json={"name": "dup", "path": str(new_case), "reindex": False})
+    assert r1.status_code == 200
+    # 末尾スラッシュを付けても重複扱い
+    r2 = client.post("/api/cases", headers=CSRF, json={"name": "dup2", "path": str(new_case) + "/", "reindex": False})
+    assert r2.status_code == 409
+
+
+def test_add_case_symlink_duplicate(mgmt_client, tmp_path):
+    client, tdir = mgmt_client
+    real = tdir / "real_case"
+    real.mkdir()
+    link = tdir / "link_case"
+    link.symlink_to(real)
+    r1 = client.post("/api/cases", headers=CSRF, json={"name": "real", "path": str(real), "reindex": False})
+    assert r1.status_code == 200
+    r2 = client.post("/api/cases", headers=CSRF, json={"name": "link", "path": str(link), "reindex": False})
+    assert r2.status_code == 409
+
+
+def test_delete_case_ok(mgmt_client):
+    client, tdir = mgmt_client
+    new_case = tdir / "del_case"
+    new_case.mkdir()
+    add_r = client.post("/api/cases", headers=CSRF, json={"name": "削除テスト", "path": str(new_case), "reindex": False})
+    cid = add_r.json()["id"]
+    del_r = client.delete(f"/api/cases/{cid}", headers=CSRF)
+    assert del_r.status_code == 200
+    cases = client.get("/api/cases").json()["cases"]
+    assert not any(c["id"] == cid for c in cases)
+    import json as _json
+    saved = _json.loads((tdir / "cases.json").read_text())
+    assert not any(c["id"] == cid for c in saved["cases"])
+
+
+def test_delete_case_unknown_404(mgmt_client):
+    client, _ = mgmt_client
+    r = client.delete("/api/cases/no_such_id", headers=CSRF)
+    assert r.status_code == 404
+
+
+def test_delete_while_reindexing_409(mgmt_client, monkeypatch):
+    client, tdir = mgmt_client
+    new_case = tdir / "reindex_case"
+    new_case.mkdir()
+    add_r = client.post("/api/cases", headers=CSRF, json={"name": "再索引中", "path": str(new_case), "reindex": False})
+    cid = add_r.json()["id"]
+
+    class FakeProc:
+        def poll(self):
+            return None  # 実行中を模擬
+
+    server._reindex_procs[cid] = FakeProc()
+    try:
+        r = client.delete(f"/api/cases/{cid}", headers=CSRF)
+        assert r.status_code == 409
+    finally:
+        server._reindex_procs.pop(cid, None)
+
+
+def test_add_case_requires_csrf(mgmt_client, tmp_path):
+    client, tdir = mgmt_client
+    new_case = tdir / "csrf_case"
+    new_case.mkdir()
+    r = client.post("/api/cases", json={"name": "x", "path": str(new_case), "reindex": False})
+    assert r.status_code == 403
+
+
+def test_add_case_default_name_from_parent(mgmt_client, tmp_path):
+    """__Document__ 配下を指定した場合、親フォルダ名が事件名になる。"""
+    client, tdir = mgmt_client
+    parent = tdir / "高山岩男[弁護革命system]"
+    parent.mkdir()
+    doc_dir = parent / "__Document__"
+    doc_dir.mkdir()
+    r = client.post("/api/cases", headers=CSRF, json={"name": "", "path": str(doc_dir), "reindex": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "高山岩男"
+
+
+def test_display_names_preserved_after_add_delete(mgmt_client, tmp_path):
+    """add/delete を経ても display_names が保持される。"""
+    client, tdir = mgmt_client
+    import json as _json
+    new_case = tdir / "dn_case"
+    new_case.mkdir()
+    add_r = client.post("/api/cases", headers=CSRF, json={"name": "dn", "path": str(new_case), "reindex": False})
+    cid = add_r.json()["id"]
+    client.delete(f"/api/cases/{cid}", headers=CSRF)
+    saved = _json.loads((tdir / "cases.json").read_text())
+    assert saved["display_names"].get("nsato") == "佐藤"
+
+
+def test_existing_case_id_and_reindex_unchanged(mgmt_client, tmp_path):
+    """既存事件の id/reindex が add/delete を経ても不変。"""
+    client, tdir = mgmt_client
+    new_case = tdir / "extra_case"
+    new_case.mkdir()
+    client.post("/api/cases", headers=CSRF, json={"name": "extra", "path": str(new_case), "reindex": False})
+    import json as _json
+    saved = _json.loads((tdir / "cases.json").read_text())
+    existing = next(c for c in saved["cases"] if c["id"] == "existing")
+    assert existing["reindex"] is False
+
+
+def test_api_cases_has_index_field(mgmt_client, tmp_path):
+    """GET /api/cases の has_index フィールドが正しく返る。"""
+    client, tdir = mgmt_client
+    # 索引なし → False
+    cases = client.get("/api/cases").json()["cases"]
+    ex = next(c for c in cases if c["id"] == "existing")
+    assert ex["has_index"] is False
+    # 索引を作って → True
+    import server as sv
+    export_dir = sv.CONFIG["cases"]["existing"]["path"] / server.EXPORT_REL
+    export_dir.parent.mkdir(parents=True, exist_ok=True)
+    export_dir.touch()
+    cases2 = client.get("/api/cases").json()["cases"]
+    ex2 = next(c for c in cases2 if c["id"] == "existing")
+    assert ex2["has_index"] is True
+
+
+def test_add_case_from_empty_config(tmp_path, monkeypatch):
+    """CONFIG_PATH 不在からの初回 add でサンプル事件が混入しない。"""
+    monkeypatch.setattr(server, "CONFIG_PATH", tmp_path / "cases.json")
+    monkeypatch.setattr(server, "CONFIG", {"cases": {}, "display_names": {}})
+    server._listing_cache.clear()
+    c = TestClient(server.app, base_url="http://127.0.0.1:8788")
+    new_case = tmp_path / "first_case"
+    new_case.mkdir()
+    r = c.post("/api/cases", headers=CSRF, json={"name": "初回事件", "path": str(new_case), "reindex": False})
+    assert r.status_code == 200
+    cases = c.get("/api/cases").json()["cases"]
+    assert len(cases) == 1
+    assert cases[0]["name"] == "初回事件"
+
+
+def test_pick_folder_normal(mgmt_client, monkeypatch):
+    import subprocess
+    client, _ = mgmt_client
+
+    class FakeProc:
+        returncode = 0
+        stdout = "/tmp/test_folder\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: FakeProc())
+    r = client.post("/api/pick-folder", headers=CSRF)
+    assert r.status_code == 200
+    assert r.json()["path"] == "/tmp/test_folder"
+
+
+def test_pick_folder_cancelled(mgmt_client, monkeypatch):
+    import subprocess
+    client, _ = mgmt_client
+
+    class FakeCancelled:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: FakeCancelled())
+    r = client.post("/api/pick-folder", headers=CSRF)
+    assert r.status_code == 200
+    assert r.json()["cancelled"] is True
+
+
+def test_reindex_log_empty(mgmt_client):
+    client, tdir = mgmt_client
+    r = client.get("/api/cases/existing/reindex/log")
+    assert r.status_code == 200
+    assert r.json()["log"] == ""
