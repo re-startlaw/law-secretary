@@ -230,6 +230,8 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
                     "indexed": True,
                     "ocr_low_confidence": bool(low_conf),
                     "ocr_pages": r["ocr_pages"],
+                    "memo": "",            # フェーズ2: viewer_meta から
+                    "has_annotations": False,  # フェーズ2: annotations から
                 }
             )
 
@@ -257,6 +259,8 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
                 "indexed": False,
                 "ocr_low_confidence": False,
                 "ocr_pages": 0,
+                "memo": "",
+                "has_annotations": False,
             }
         )
 

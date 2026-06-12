@@ -9,11 +9,38 @@
 <body>
   <header id="topbar">
     <h1>記録ビューア</h1>
-    <div id="case-picker"></div>
+    <select id="case-picker" aria-label="事件選択"></select>
+    <nav id="main-tabs">
+      <button class="main-tab active" data-tab="docs">文書DB</button>
+      <button class="main-tab" data-tab="search">テキスト検索</button>
+    </nav>
+    <span id="user-badge"></span>
   </header>
+
   <main id="app">
-    <p class="placeholder">読み込み中…（フェーズ1でUIを実装）</p>
+    <!-- 文書DBタブ -->
+    <section id="tab-docs" class="tab-panel active">
+      <div id="evidence-tabs" class="evidence-tabs"></div>
+      <div class="docs-toolbar">
+        <input id="filter-input" type="search" placeholder="キーワード絞り込み（タイトル・符号・作成者）" />
+        <label class="chk"><input type="checkbox" id="anno-only" /> 注釈あり</label>
+        <label class="chk"><input type="checkbox" id="wareki" /> 和暦</label>
+        <span id="doc-count" class="count"></span>
+      </div>
+      <div id="docs-table-wrap" class="table-wrap">
+        <table id="docs-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- テキスト検索タブ（1-Cで実装） -->
+    <section id="tab-search" class="tab-panel">
+      <p class="placeholder">テキスト検索はフェーズ1-Cで実装します。</p>
+    </section>
   </main>
+
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>
