@@ -70,13 +70,29 @@ function processUnreadEmails() {
         // 2. 返信文面の生成
         const draftBody = generateReplyBody(apiKey, settings, sender, subject, body);
         
-        // 3. 宛先決定（ココナラ等のno-replyは本文中の依頼者メールへ送る）
-        const recipients = resolveReplyRecipients_(sender, subject, body, originalTo, originalCc, myEmail);
-        
-        lastMessage.createDraftReply(draftBody, {
-          to: recipients.to,
-          cc: recipients.cc
-        });
+        // 3. 返信モード決定（通常は全員返信／ココナラ等no-replyは本文中の依頼者メールへ直接送る）
+        const target = resolveReplyTarget_(sender, subject, body, myEmail);
+        const htmlBody = buildReplyHtmlBody_(draftBody, lastMessage);
+
+        // 引用付きで下書き作成を試み、失敗したら引用なしで再試行する
+        let draftCreated = false;
+        try {
+          if (target.mode === 'direct') {
+            GmailApp.createDraft(target.to, 'Re: ' + subject, draftBody, { htmlBody });
+          } else {
+            lastMessage.createDraftReplyAll(draftBody, { htmlBody });
+          }
+          draftCreated = true;
+        } catch (quoteError) {
+          console.error('引用付き下書き作成に失敗。引用なしで再試行: ' + quoteError.message);
+        }
+        if (!draftCreated) {
+          if (target.mode === 'direct') {
+            GmailApp.createDraft(target.to, 'Re: ' + subject, draftBody);
+          } else {
+            lastMessage.createDraftReplyAll(draftBody);
+          }
+        }
         
         thread.addLabel(labelDraft);
         

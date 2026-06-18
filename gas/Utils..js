@@ -66,30 +66,12 @@ function extractEmail_(fromField) {
   return (m ? m[1] : String(fromField)).trim();
 }
 
-function hasAddressInList_(list, email) {
-  const lowerEmail = String(email || '').toLowerCase();
-  if (!lowerEmail) return false;
-  return String(list || '')
-    .split(',')
-    .map((e) => extractEmail_(e).toLowerCase())
-    .some((e) => e === lowerEmail);
-}
-
 function hasYonetaniSalutation_(body) {
   const firstLines = String(body || '')
     .split(/\r?\n/)
     .slice(0, 3)
     .join('\n');
   return /米谷|先生/.test(firstLines);
-}
-
-function excludeMyAddress_(list, myEmail) {
-  const lowerMyEmail = String(myEmail || '').toLowerCase();
-  return String(list || '')
-    .split(',')
-    .map((e) => e.trim())
-    .filter((e) => e && (!lowerMyEmail || !e.toLowerCase().includes(lowerMyEmail)))
-    .join(', ');
 }
 
 function extractEmailsFromText_(text) {
@@ -107,11 +89,15 @@ function extractEmailsFromText_(text) {
 }
 
 /**
- * no-reply系の相談メールは、実際の相談者メールアドレスを本文から拾う
+ * 返信モードを決定する。
+ * - 通常メール: { mode: 'replyAll' } … 送信者＋元To＋元Cc 全員へ返信（自分は自動除外）
+ * - ココナラ等の no-reply 相談メール: { mode: 'direct', to } … 本文から拾った相談者アドレスへ直接送る
+ *
+ * 宛先の組み立て・自分の除外・表示名内カンマ・重複排除は GmailMessage.createDraftReplyAll の
+ * ネイティブ動作に委ねるため、ここでは特例の宛先抽出だけを担う。
  */
-function resolveReplyRecipients_(sender, subject, body, originalTo, originalCc, myEmail) {
+function resolveReplyTarget_(sender, subject, body, myEmail) {
   const senderEmail = extractEmail_(sender).toLowerCase();
-  const ccList = excludeMyAddress_(originalCc, myEmail);
 
   if (
     senderEmail === 'no-reply@mail.coconala.com' &&
@@ -123,12 +109,11 @@ function resolveReplyRecipients_(sender, subject, body, originalTo, originalCc, 
     });
 
     if (candidates.length > 0) {
-      return { to: candidates[0], cc: '' };
+      return { mode: 'direct', to: candidates[0] };
     }
   }
 
-  const toList = [sender, excludeMyAddress_(originalTo, myEmail)].filter((e) => e).join(', ');
-  return { to: toList, cc: ccList };
+  return { mode: 'replyAll' };
 }
 
 /**
@@ -174,13 +159,6 @@ function evaluateStaticReplyNecessity_(sender, subject, body, originalTo, origin
     return {
       needsReply: false,
       reason: '件名が返信不要ブラックリストに一致するため、返信不要としました。'
-    };
-  }
-
-  if (!hasAddressInList_(originalTo, myEmail) && hasAddressInList_(originalCc, myEmail)) {
-    return {
-      needsReply: false,
-      reason: '自分のアドレスがToに含まれずCCのみ受信のため、返信不要としました。'
     };
   }
 
@@ -321,6 +299,59 @@ function normalizeStringArray_(value, maxItems, maxLength) {
     .filter((v) => v)
     .slice(0, maxItems)
     .map((v) => v.substring(0, maxLength));
+}
+
+/**
+ * & < > " をHTMLエスケープする
+ */
+function escapeHtml_(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 元メールHTMLを blockquote 埋め込み用に軽量サニタイズする
+ * - <style>タグ除去（CSS漏洩防止）
+ * - <body>があれば内側だけ抽出（Outlook等のフルHTMLドキュメント対策）
+ * - cid:インライン画像を [画像] に置換（参照切れ防止）
+ */
+function sanitizeQuotedHtml_(html) {
+  let s = String(html || '');
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
+  const bodyMatch = s.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch) s = bodyMatch[1];
+  s = s.replace(/<img[^>]*src=["']?cid:[^"'>]*["']?[^>]*>/gi, '[画像]');
+  return s;
+}
+
+/**
+ * Gmail の「全員に返信」ボタンと同等の引用付きHTML本文を組み立てる
+ * 引用HTMLが100KBを超える場合は省略メッセージに差し替える
+ */
+function buildReplyHtmlBody_(plainDraftBody, lastMessage) {
+  const draftHtml = escapeHtml_(plainDraftBody).replace(/\n/g, '<br>');
+  const date = lastMessage.getDate();
+  const tz = Session.getScriptTimeZone();
+  // ISO曜日(u): 1=月…7=日 → 日本語曜日配列（インデックス0=月）
+  const youbi = ['月', '火', '水', '木', '金', '土', '日'][Number(Utilities.formatDate(date, tz, 'u')) - 1];
+  const dateStr = Utilities.formatDate(date, tz, 'yyyy年M月d日') +
+    '(' + youbi + ') ' + Utilities.formatDate(date, tz, 'H:mm');
+  const quoteHeader = dateStr + ' ' + escapeHtml_(lastMessage.getFrom()) + ':';
+  let quotedHtml = sanitizeQuotedHtml_(lastMessage.getBody());
+  if (quotedHtml.length > 100000) {
+    quotedHtml = '（元メッセージが長いため引用を省略しました）';
+  }
+  return (
+    '<div dir="ltr">' + draftHtml + '</div><br>' +
+    '<div class="gmail_quote">' +
+    '<div dir="ltr" class="gmail_attr">' + quoteHeader + '<br></div>' +
+    '<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">' +
+    quotedHtml +
+    '</blockquote></div>'
+  );
 }
 
 /**
