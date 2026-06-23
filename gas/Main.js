@@ -4,9 +4,12 @@
 const CONFIG = {
   SHEET_SETTINGS: '設定',
   SHEET_LOGS: 'ログ',
-  LABEL_DRAFT_CREATED: 'AI_ドラフト作成済', 
+  LABEL_DRAFT_CREATED: 'AI_ドラフト作成済',
   LABEL_NO_REPLY: 'AI_返信不要',
-  API_PROP_KEY: 'GEMINI_API_KEY'
+  API_PROP_KEY: 'GEMINI_API_KEY',
+  // 全員返信のCcから必ず除外する自分側アドレス（Session.getActiveUser()の主アドレスと
+  // 一致しないエイリアス受信でも自分がCcに残らないよう、明示的に列挙する）
+  OWNER_EMAILS: ['n.kometani@re-startlaw.com']
 };
 
 function onOpen() {
@@ -73,6 +76,12 @@ function processUnreadEmails() {
         // 3. 返信モード決定（通常は全員返信／ココナラ等no-replyは本文中の依頼者メールへ直接送る）
         const target = resolveReplyTarget_(sender, subject, body, myEmail);
         const htmlBody = buildReplyHtmlBody_(draftBody, lastMessage);
+        // 全員返信相当の宛先を自前で組み立て、自分側アドレス（主アドレス＋エイリアス）を除外する。
+        // createDraftReplyAll は元To＋元Ccを自動で全員追加し、cc オプションは「追加」しかできない
+        // （主アドレスしか自動除外されない）ため、エイリアス受信や別アカウント実行だと自分が残る。
+        // そこで createDraftReply（宛先=送信者のみ、自動追加なし）を使い、送信者以外の宛先は
+        // 自分を除外した cc として明示的に追加する。これで自分は確実に宛先から外れる。
+        const replyAllCc = buildReplyAllCc_(sender, originalTo, originalCc, myEmail);
 
         // 引用付きで下書き作成を試み、失敗したら引用なしで再試行する
         let draftCreated = false;
@@ -80,7 +89,7 @@ function processUnreadEmails() {
           if (target.mode === 'direct') {
             GmailApp.createDraft(target.to, 'Re: ' + subject, draftBody, { htmlBody });
           } else {
-            lastMessage.createDraftReplyAll(draftBody, { htmlBody });
+            lastMessage.createDraftReply(draftBody, { htmlBody, cc: replyAllCc });
           }
           draftCreated = true;
         } catch (quoteError) {
@@ -90,7 +99,7 @@ function processUnreadEmails() {
           if (target.mode === 'direct') {
             GmailApp.createDraft(target.to, 'Re: ' + subject, draftBody);
           } else {
-            lastMessage.createDraftReplyAll(draftBody);
+            lastMessage.createDraftReply(draftBody, { cc: replyAllCc });
           }
         }
         

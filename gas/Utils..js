@@ -89,12 +89,38 @@ function extractEmailsFromText_(text) {
 }
 
 /**
+ * 全員返信相当の Cc を組み立てる。
+ *
+ * createDraftReplyAll は元To＋元Ccを自動で全員追加し、cc オプションは「追加」しかできない
+ * （アカウント主アドレスしか自動除外されない）ため、エイリアス受信や別アカウント実行だと
+ * 自分が宛先に残ってしまう。そこで Main 側では createDraftReply（宛先=送信者のみ／自動追加なし）
+ * を使い、送信者以外の宛先をこの関数が返す Cc として明示的に追加する。
+ *
+ * 元To＋元Cc から実体アドレスを抽出し、自分側アドレス（主アドレス＋ CONFIG.OWNER_EMAILS）と
+ * 元送信者（createDraftReply の to に入るので重複排除）を除いた一覧を返す。
+ * 空文字を渡すと Cc なし＝送信者のみへの返信になる。
+ */
+function buildReplyAllCc_(sender, originalTo, originalCc, myEmail) {
+  const exclude = {};
+  CONFIG.OWNER_EMAILS
+    .concat([myEmail, extractEmail_(sender)])
+    .forEach((e) => {
+      const lower = String(e || '').toLowerCase();
+      if (lower) exclude[lower] = true;
+    });
+
+  return extractEmailsFromText_(`${originalTo || ''}, ${originalCc || ''}`)
+    .filter((email) => !exclude[email.toLowerCase()])
+    .join(', ');
+}
+
+/**
  * 返信モードを決定する。
- * - 通常メール: { mode: 'replyAll' } … 送信者＋元To＋元Cc 全員へ返信（自分は自動除外）
+ * - 通常メール: { mode: 'replyAll' } … 送信者をToに、元To＋元Ccの残り全員をCcにして返信（自分は buildReplyAllCc_ で除外）
  * - ココナラ等の no-reply 相談メール: { mode: 'direct', to } … 本文から拾った相談者アドレスへ直接送る
  *
- * 宛先の組み立て・自分の除外・表示名内カンマ・重複排除は GmailMessage.createDraftReplyAll の
- * ネイティブ動作に委ねるため、ここでは特例の宛先抽出だけを担う。
+ * 表示名内カンマ・重複排除・自分の除外は buildReplyAllCc_ 側で扱うため、
+ * ここでは特例の宛先抽出だけを担う。
  */
 function resolveReplyTarget_(sender, subject, body, myEmail) {
   const senderEmail = extractEmail_(sender).toLowerCase();
