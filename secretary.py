@@ -11,6 +11,7 @@ import re
 import shutil
 import sys
 import time
+import unicodedata
 import urllib.parse
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -110,7 +111,11 @@ ACCOUNTING_KEYWORDS = {
 CRIMINAL_SUBFOLDER_KEYWORDS = {
     "01_選任関係": ["選任", "委任"],
     "02_身体拘束関係": ["勾留", "身体拘束", "逮捕", "保釈"],
-    "03_検察官提出書面": ["検察官提出", "起訴状"],
+    "03_検察官提出書面": [
+        "検察官提出", "起訴状", "追起訴状",
+        "令和8年検第※9063", "令和8年検第※9064", "令和8年検第※9067",
+        "14160", "14161", "14164",
+    ],
     "04_弁護人提出書面": ["準抗告", "弁護人", "意見書"],
     "05_検察官証拠": ["検察官証拠", "証拠開示"],
     "06_裁判所手続": ["裁判所", "期日"],
@@ -142,10 +147,13 @@ CIVIL_MARKER = "00主張"
 # key: 依頼者フォルダ名の氏名部分（全角スペースあり）
 # value: ファイル名に現れうる別名・通称のリスト（1つでも filename に含まれればマッチ）
 CLIENT_ALIASES = {
-    "ファム　ティ　フォン": ["ファム", "Pham", "Phạm", "phuong"],
     "ふ_ファム・ティ・フォン": ["ファム", "Pham", "Phạm", "phuong", "ダオズイフン"],
-    "ま_馬さん": ["馬様", "馬強", "Angelina", "アンジェリーナ"],
-    "た_田村正宣": ["田村", "田中成子", "有限会社タナカ", "有限会社タナ力"],
+    "ま_馬強": ["馬様", "馬強", "Angelina", "アンジェリーナ"],
+    "た_田村正宣": [
+        "田村", "田中成子", "有限会社タナカ", "有限会社タナ力",
+        "令和8年検第※9063", "令和8年検第※9064", "令和8年検第※9067",
+        "14160", "14161", "14164",
+    ],
     "す_鈴木七海": ["鈴木七海", "服部咲"],
 }
 
@@ -153,8 +161,12 @@ CLIENT_ALIASES = {
 # 「分からなかった」になった定番送信元をここに追補していく。
 SENDER_EMAIL_TO_CLIENT: dict[str, str] = {
     "nao@teruiglobal.jp": "ふ_ファム・ティ・フォン",
-    "martin.ma@letour.co.jp": "ま_馬さん",
+    "martin.ma@letour.co.jp": "ま_馬強",
 }
+
+# 手動で登録した固定エントリの凍結コピー。main() で保存ログ学習を適用したあと、
+# この手動エントリを後勝ちで再適用し、学習が固定値を上書きしないようにする。
+_MANUAL_SENDER_EMAIL_TO_CLIENT: dict[str, str] = dict(SENDER_EMAIL_TO_CLIENT)
 
 # 同一ドメインが複数依頼者に紐づく場合は登録しないこと。
 SENDER_DOMAIN_TO_CLIENT: dict[str, str] = {}
@@ -648,11 +660,24 @@ def sender_routing_hints(sender: str) -> str:
     return " ".join(hints)
 
 
+def _norm_text(value: str) -> str:
+    """濁点分解や全半角揺れを分類前に寄せる。"""
+    return unicodedata.normalize("NFKC", value or "")
+
+
+def classify_special_document(filename, context=""):
+    """事務所運用上、経理より優先する固定分類ルール。"""
+    haystack = _norm_text(f"{filename} {context}")
+    if "プリア常盤台" in haystack or "プリアときわ台" in haystack:
+        return os.path.join(BASE_PATH, "共有用", "04_事務", "各種書類", "社宅関係")
+    return None
+
+
 def classify_accounting(filename, context=""):
     """経理書類として分類できる場合、移動先パスを返す。
     context は送信者・メールタイトルなど、ファイル名以外のヒント文字列。
     """
-    haystack = f"{filename} {context}"
+    haystack = _norm_text(f"{filename} {context}")
     keywords_in_name = ["領収書", "請求書", "精算"]
     is_accounting = any(kw in haystack for kw in keywords_in_name)
 
@@ -677,41 +702,125 @@ def classify_case_record(filename, clients, context=""):
     依頼者名は client_name と CLIENT_ALIASES に列挙した別名のどちらでもマッチする。
     context（送信者・件名）も依頼者名・サブフォルダ判定の検索対象にする。
     """
-    haystack = f"{filename} {context}"
+    haystack = _norm_text(f"{filename} {context}")
     for client in clients:
         names = (
             [client["folder_name"], client["client_name"]]
             + CLIENT_ALIASES.get(client["client_name"], [])
         )
-        names = [n for n in names if n]
+        names = [_norm_text(n) for n in names if n]
         if not any(name in haystack for name in names):
             continue
-        # 依頼者が見つかった → サブフォルダを判定
-        if client["case_type"] == "criminal":
-            subfolder = _match_subfolder(haystack, CRIMINAL_SUBFOLDER_KEYWORDS)
-        elif client["case_type"] == "civil":
-            subfolder = _match_subfolder(haystack, CIVIL_SUBFOLDER_KEYWORDS)
-        else:
-            # 刑事/民事マーカーが無い案件（在留特別許可等）は双方のキーワードで試み、
-            # 実在するサブフォルダのみ採用する。
-            combined = {**CIVIL_SUBFOLDER_KEYWORDS, **CRIMINAL_SUBFOLDER_KEYWORDS}
-            subfolder = _match_subfolder(haystack, combined)
-            if subfolder and not os.path.isdir(os.path.join(client["path"], subfolder)):
-                subfolder = None
-
-        if subfolder:
-            return os.path.join(client["path"], subfolder)
-        # サブフォルダが特定できない → 依頼者フォルダ直下
-        return client["path"]
+        # 依頼者が見つかった → サブフォルダを判定して移動先を返す
+        return _resolve_client_dest(client, haystack)
     return None
+
+
+def _llm_case_dest_allowed(rel: str, clients, guard_text: str) -> bool:
+    """LLMが返した保存先 rel が 01_事件記録/<依頼者> の場合、その依頼者の
+    氏名・別名が guard_text（元名＋送信者＋件名＋本文）に実在するか検証する。
+
+    - rel が事件記録でない、または依頼者フォルダを特定できない → True（対象外）
+    - 依頼者を特定でき、その名称が guard_text に一切現れない → False（誤割当として拒否）
+
+    保存ログのキーワードヒント過学習で無関係文書が活発案件へ誤爆するのを防ぐ。
+    外形分類 classify_case_record と同じ「依頼者名が実在する」基準を LLM にも課す。
+    """
+    if not rel.startswith("01_事件記録/"):
+        return True
+    parts = rel.split("/")
+    folder_name = parts[1] if len(parts) >= 2 else ""
+    client = next(
+        (c for c in clients if c.get("folder_name") == folder_name), None
+    )
+    if not client:
+        return True  # 依頼者を特定できないときは判定せず通す（保守的）
+    names = (
+        [client.get("folder_name", ""), client.get("client_name", "")]
+        + CLIENT_ALIASES.get(client.get("client_name", ""), [])
+    )
+    names = [_norm_text(n) for n in names if n]
+    hay = _norm_text(guard_text)
+    return any(n in hay for n in names)
+
+
+def _select_case_subfolder(client, haystack):
+    """依頼者フォルダ内の適切なサブフォルダ名を返す（無ければ None）。
+
+    案件種別（criminal/civil/unknown）に応じてキーワードマップを切り替える。
+    刑事/民事マーカーが無い案件（unknown・在留特別許可等）は双方のキーワードで
+    試み、**実在するサブフォルダのみ**採用する（存在しないサブフォルダへの誤割当を防ぐ）。
+    """
+    if client["case_type"] == "criminal":
+        return _match_subfolder(haystack, CRIMINAL_SUBFOLDER_KEYWORDS)
+    if client["case_type"] == "civil":
+        return _match_subfolder(haystack, CIVIL_SUBFOLDER_KEYWORDS)
+    combined = {**CIVIL_SUBFOLDER_KEYWORDS, **CRIMINAL_SUBFOLDER_KEYWORDS}
+    subfolder = _match_subfolder(haystack, combined)
+    if subfolder and not os.path.isdir(os.path.join(client["path"], subfolder)):
+        subfolder = None
+    return subfolder
+
+
+def _resolve_client_dest(client, haystack):
+    """依頼者が確定した後、サブフォルダ込みの移動先パスを返す。"""
+    subfolder = _select_case_subfolder(client, haystack)
+    if subfolder:
+        return os.path.join(client["path"], subfolder)
+    # サブフォルダが特定できない → 依頼者フォルダ直下
+    return client["path"]
 
 
 def _match_subfolder(text, keyword_map):
     """キーワードマップからサブフォルダ名を返す。"""
+    norm_text = _norm_text(text)
     for subfolder, keywords in keyword_map.items():
-        if any(kw in text for kw in keywords):
+        if any(_norm_text(kw) in norm_text for kw in keywords):
             return subfolder
     return None
+
+
+def classify_by_sender_email(filename, clients, sender="", subject=""):
+    """送信者メールアドレスから依頼者が一意に確定できる場合、移動先を返す。
+
+    SENDER_EMAIL_TO_CLIENT（手動固定＋保存ログ学習）でメアド→依頼者を解決し、
+    文字列再マッチ（os.listdir 先勝ちの脆さ）に頼らず該当依頼者へ確定的に振り分ける。
+    ファイル名・中身に依頼者名が無くても送信者だけで案件が決まる。
+
+    Returns:
+        tuple(dest_path, rel) または None（送信者で確定できないとき）。
+    """
+    if not sender:
+        return None
+    target = None
+    for em in _extract_emails_from_sender(sender):
+        cn = SENDER_EMAIL_TO_CLIENT.get(em)
+        if cn:
+            target = cn
+            break
+    if not target:
+        return None
+    # 学習値は folder_name 表記、手動値は client_name 表記。全角スペース依頼者では
+    # 両者が食い違うため、client_name と folder_name の両方で照合する。
+    client = next(
+        (
+            c for c in clients
+            if target in (c.get("client_name"), c.get("folder_name"))
+        ),
+        None,
+    )
+    if not client:
+        logging.warning(
+            f"送信者→依頼者 解決名がフォルダ一覧に無い: {target!r}（sender={sender!r}）"
+        )
+        return None
+    haystack = _norm_text(f"{filename} {subject}")
+    dest = _resolve_client_dest(client, haystack)
+    rel = os.path.relpath(dest, os.path.join(BASE_PATH, "共有用"))
+    logging.info(
+        f"送信者メアド確定: {filename} → {rel} (sender={sender!r})"
+    )
+    return dest, rel
 
 
 def classify_file(filename, clients, sender="", subject=""):
@@ -746,19 +855,32 @@ def classify_file(filename, clients, sender="", subject=""):
         # 学習済みフォルダが消えている場合は無視して通常分類に進む
         logging.info(f"学習ルーティング先が消失: {learned_rel}（無視して通常分類）")
 
-    # 1. 事件記録チェック（送信者が依頼者由来なら最優先で当てる）
+    # 1. 固定ルール（社宅など、請求書でも経理へ入れないもの）
+    dest = classify_special_document(filename, context)
+    if dest:
+        rel = os.path.relpath(dest, os.path.join(BASE_PATH, "共有用"))
+        return dest, rel
+
+    # 2. 送信者メアド確定（既知送信者なら依頼者を一意に確定。ファイル名・中身に
+    #    依頼者名が無くても案件フォルダへ。経理より前＝依頼者本人発の請求書等が
+    #    案件フォルダでなく経理へ吸われる回帰を避ける）
+    sender_dest = classify_by_sender_email(filename, clients, sender, subject)
+    if sender_dest:
+        return sender_dest
+
+    # 3. 事件記録チェック（ファイル名・件名から依頼者名でマッチ）
     dest = classify_case_record(filename, clients, context)
     if dest:
         rel = os.path.relpath(dest, os.path.join(BASE_PATH, "共有用"))
         return dest, rel
 
-    # 2. 経理書類チェック（ベンダー送信者や件名から経理勘定を推定）
+    # 4. 経理書類チェック（ベンダー送信者や件名から経理勘定を推定）
     dest = classify_accounting(filename, context)
     if dest:
         rel = os.path.relpath(dest, os.path.join(BASE_PATH, "共有用"))
         return dest, rel
 
-    # 3. 判断不能 → 分からなかったフォルダ（pre_trashは重複退避専用）
+    # 5. 判断不能 → 分からなかったフォルダ（pre_trashは重複退避専用）
     return UNKNOWN_FOLDER, "06_分類依頼/分からなかった"
 
 
@@ -1178,6 +1300,20 @@ def classify_by_content(
             logging.warning(f"LLM返却パス不在: {original_name} → {rel}")
             return None
 
+    # 事件記録への誤割当ガード:
+    # LLMが 01_事件記録/<依頼者> に振り分けたのに、その依頼者の氏名・別名が
+    # 元ファイル名・送信者・件名・本文のどこにも現れない場合は、保存ログの
+    # キーワードヒント過学習（活発な案件への引っ張られ）による誤爆とみなして拒否する。
+    # 外形分類 classify_case_record と同じ「依頼者名が実在する」基準を LLM にも課す。
+    if not _llm_case_dest_allowed(
+        rel, clients, f"{original_name} {sender} {subject} {extracted['text']}"
+    ):
+        logging.warning(
+            f"LLM事件記録誤割当ガード: {original_name} → {rel} "
+            f"（依頼者名が本文・件名・送信者に不在のため拒否）"
+        )
+        return None
+
     # 経理配下なら 4 フィールド抽出結果でリネームを試みる
     if rel.startswith("03_経理/") or rel == "03_経理":
         accounting_category = tool_input.get("accounting_category")
@@ -1221,6 +1357,57 @@ def rename_file(filename):
         return filename
     today = datetime.now().strftime("%y%m%d")
     return f"{today}_{filename}"
+
+
+_AMBIGUOUS_STEM_RE = re.compile(
+    r"""(?xi)
+    ^(?:
+        receipt[\-_.\d]*           # receipt, receipt_123
+      | invoice[\-_.\d]*           # invoice, invoice_2026
+      | statement[\-_.\d]*         # statement
+      | bill[\-_.\d]*              # bill, bill_001
+      | scan[\-_\d]*               # scan001, scan_20260612
+      | scansnap[\-_.\d]*          # ScanSnap出力
+      | img[\-_\d][\w\-_]*         # IMG_1234
+      | image[\-_\d]*              # image001
+      | dcim[\-_\d]*               # DCIM_1234
+      | document[\-_\d]*           # document, document1
+      | file[\-_\d]*               # file001
+      | download[\-_\d]*           # download, download1
+      | untitled[\-_\d]*           # untitled
+      | noname[\-_\d]*             # noname
+      | [\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}  # UUID
+      | [0-9a-f]{32,}              # MD5/SHA ハッシュ
+      | \d+                        # 純粋な数字列
+    )$
+    """,
+    re.IGNORECASE,
+)
+
+
+def _is_ambiguous_name(filename: str) -> bool:
+    """ファイル名が内容を示さない汎用名かどうかを判定する。
+    日付プレフィックス（YYMMDD_ or YYYYMMDD_）と拡張子を除いたステムで判定。
+    """
+    stem = os.path.splitext(filename)[0]
+    stem = re.sub(r"^\d{6,8}[_\-]", "", stem)
+    return bool(_AMBIGUOUS_STEM_RE.match(stem))
+
+
+def _validate_llm_filename(llm_name: str, original_name: str) -> str | None:
+    """LLMが返したファイル名の最小バリデーション。問題があれば None を返す。"""
+    if not llm_name:
+        return None
+    if "/" in llm_name or ".." in llm_name:
+        return None
+    if re.search(r"[\x00:\\]", llm_name):
+        return None
+    if len(llm_name.encode("utf-8")) > 255:
+        return None
+    orig_ext = os.path.splitext(original_name)[1].lower()
+    if orig_ext and not llm_name.lower().endswith(orig_ext):
+        return None
+    return llm_name
 
 
 def move_file(src_path, dest_dir, new_name):
@@ -1839,8 +2026,10 @@ def send_notification(
         "【分類結果】",
     ]
     if file_results:
-        for fname, dest in file_results:
+        for fname, dest, drive_link in file_results:
             body_lines.append(f"  ・{fname} → {dest}")
+            if drive_link:
+                body_lines.append(f"    Drive: {drive_link}")
     else:
         body_lines.append("  （本日の分類対象ファイルはありませんでした）")
 
@@ -1871,15 +2060,17 @@ def send_notification(
                 "以下のファイルはfreeeファイルボックスにアップロード済みです。"
                 "freee上での仕訳登録（勘定科目・取引先・金額入力）をお願いいたします。"
             )
-        for fname, dest, note, receipt_id, ui_url, err in freee_action_items:
+        for fname, dest, note, receipt_id, receipt_number, ui_url, err in freee_action_items:
             body_lines.append(f"  ・{fname}")
             body_lines.append(f"    保存先: {dest}")
             if note:
                 body_lines.append(f"    判定: {note}")
             if receipt_id:
-                body_lines.append(f"    freee receipt_id: {receipt_id}")
+                num_display = str(receipt_number) if receipt_number else str(receipt_id)
                 if ui_url:
-                    body_lines.append(f"    freeeファイルボックス: {ui_url}")
+                    body_lines.append(f"    freeeファイルボックス No.{num_display}: {ui_url}")
+                else:
+                    body_lines.append(f"    freeeファイルボックス No.{num_display}")
             elif err:
                 body_lines.append(f"    アップロード失敗: {err}（手動アップロードをお願いします）")
     else:
@@ -2056,6 +2247,8 @@ def main():
     # 保存ログからメアド→依頼者マップを自動構築（既存固定辞書を補強）
     learned_index, learn_stats = build_sender_email_index(sheet_data, clients)
     SENDER_EMAIL_TO_CLIENT.update(learned_index)
+    # 手動固定エントリを後勝ちで再適用（学習が固定値を上書きしないように）
+    SENDER_EMAIL_TO_CLIENT.update(_MANUAL_SENDER_EMAIL_TO_CLIENT)
     print(
         f"送信者メアド学習: {learn_stats['emails_indexed']}件追加 "
         f"(走査{learn_stats['rows_scanned']}行 / "
@@ -2138,7 +2331,8 @@ def main():
             canonical_name, clients, sender=sender, subject=subject
         )
 
-        # 外形分類で UNKNOWN に落ちたら LLM フォールバック
+        # 外形分類で UNKNOWN に落ちたら LLM フォールバック（分類もリネームも LLM が決定）
+        # 汎用ファイル名（receipt, scan 等）は分類成功でも LLM でリネームのみ実施
         l_note = ""
         llm_extras: dict = {}
         if dest_dir == UNKNOWN_FOLDER:
@@ -2151,6 +2345,20 @@ def main():
                 l_note = f"LLM推定: {reasoning}"
                 llm_used += 1
                 print(f"  [LLM] {original_name} → {dest_description} ({reasoning})")
+        elif _is_ambiguous_name(original_name):
+            llm_result = classify_by_content(
+                src_path, original_name, sender, subject, clients,
+                sheet_keyword_index=sheet_keyword_index,
+            )
+            if llm_result:
+                llm_name, _llm_dir, _llm_desc, reasoning, new_extras = llm_result
+                validated = _validate_llm_filename(llm_name, original_name)
+                if validated:
+                    canonical_name = validated
+                    l_note = f"LLMリネーム: {reasoning}"
+                llm_extras = new_extras
+                llm_used += 1
+                print(f"  [LLMリネーム] {original_name} → {canonical_name}")
         new_name = canonical_name
 
         # 佐藤さんへのアクション判定（移動前にsrc_pathで本文をチェック）
@@ -2230,9 +2438,10 @@ def main():
                 (original_name, actual_name, d_cell, dest_description, l_note)
             )
 
-        file_results.append((actual_name, dest_description))
+        file_results.append((actual_name, dest_description, link_url))
         if needs_freee_note:
             receipt_id = None
+            receipt_number = None
             ui_url = None
             upload_error = None
             if freee_filebox is not None:
@@ -2245,6 +2454,7 @@ def main():
                         business_type="corporate",
                     )
                     receipt_id = r.get("id")
+                    receipt_number = r.get("receipt_number")
                     ui_url = r.get("ui_url")
                     logging.info(
                         f"freeeファイルボックス登録: {actual_name} → "
@@ -2263,7 +2473,7 @@ def main():
                 logging.warning(f"freee_filebox未読込: {actual_name}（手動アップロード必要）")
             freee_action_items.append(
                 (actual_name, dest_description, needs_freee_note,
-                 receipt_id, ui_url, upload_error)
+                 receipt_id, receipt_number, ui_url, upload_error)
             )
         if needs_bengokakumei:
             bengokakumei_action_items.append((actual_name, dest_description))
