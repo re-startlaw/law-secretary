@@ -73,6 +73,7 @@ BACKUP_TARGETS = [
     os.path.expanduser("~/law-secretary/secretary.py"),
 ]
 LOG_PATH = os.path.expanduser("~/law-secretary/secretary.log")
+LOCK_PATH = os.path.expanduser("~/law-secretary/secretary.lock")
 
 # ── ログ設定 ──
 logging.basicConfig(
@@ -499,6 +500,8 @@ def build_sender_email_index(
             rows_skipped += 1
             continue
         for em in _extract_emails_from_sender(sender):
+            if _is_generic_sender_key(em):
+                continue
             candidates.setdefault(em, set()).add(folder)
 
     index: dict[str, str] = {}
@@ -564,6 +567,34 @@ def normalize_subject_for_key(subject: str) -> str:
     return s.lower()
 
 
+# スキャナー・eFax等の汎用送信元と空件名は (送信者, 件名) 学習・照合の対象外。
+# 全スキャンが同一キー（例: 送信者=米谷スキャン/件名=なし）に潰れ、過去に件数の
+# 多かった保存先へ無関係書類が誤ルーティングされる事故（260701: 税金通知が
+# た_田村正宣/02_身体拘束関係 行き）を防ぐ。
+_GENERIC_SENDER_KEYS = {"米谷スキャン", "スキャン", "scansnap", "scan", "efax"}
+_GENERIC_SENDER_EMAIL_RE = re.compile(
+    r"^(no-?reply|donotreply|scan\w*|fax\w*|efax\w*)@|efax", re.IGNORECASE
+)
+_GENERIC_SUBJECT_KEYS = {
+    "", "なし", "無題", "no subject", "(no subject)", "untitled", "スキャン",
+}
+
+
+def _is_generic_sender_key(key: str) -> bool:
+    """スキャナー・eFax・noreply等、案件特定に使えない送信者キーか。"""
+    k = key.strip().lower()
+    if k in _GENERIC_SENDER_KEYS:
+        return True
+    if "@" in k and _GENERIC_SENDER_EMAIL_RE.search(k):
+        return True
+    return False
+
+
+def _is_generic_subject_key(subj_key: str) -> bool:
+    """「なし」「無題」等、書類種別の情報を持たない件名キーか。"""
+    return subj_key.strip().lower() in _GENERIC_SUBJECT_KEYS
+
+
 def build_sender_subject_routing(
     sheet_data: list[list[str]],
 ) -> tuple[dict[tuple[str, str], str], dict[str, int]]:
@@ -600,9 +631,11 @@ def build_sender_subject_routing(
             skipped += 1
             continue
         subj_key = normalize_subject_for_key(subject)
-        if not subj_key:
+        if not subj_key or _is_generic_subject_key(subj_key):
             continue
         for sk in _sender_keys(sender):
+            if _is_generic_sender_key(sk):
+                continue
             cell = counts.setdefault((sk, subj_key), {})
             cell[dest_clean] = cell.get(dest_clean, 0) + 1
 
@@ -631,9 +664,11 @@ def lookup_learned_route(sender: str, subject: str) -> str | None:
     if not LEARNED_ROUTING:
         return None
     subj_key = normalize_subject_for_key(subject or "")
-    if not subj_key:
+    if not subj_key or _is_generic_subject_key(subj_key):
         return None
     for sk in _sender_keys(sender or ""):
+        if _is_generic_sender_key(sk):
+            continue
         rel = LEARNED_ROUTING.get((sk, subj_key))
         if rel:
             return rel
@@ -1283,7 +1318,11 @@ def classify_by_content(
         })
         return None
 
-    canonical_name = tool_input.get("canonical_filename") or rename_file(original_name)
+    # LLM返却名は検証してから採用（"/"・拡張子すり替え等はrename_fileへフォールバック）
+    canonical_name = (
+        _validate_llm_filename(tool_input.get("canonical_filename") or "", original_name)
+        or rename_file(original_name)
+    )
     rel = (tool_input.get("dest_relative_path") or "").strip().lstrip("/")
     reasoning = tool_input.get("reasoning") or ""
     if not rel:
@@ -1974,6 +2013,10 @@ def _collect_pending_files(sheet_data) -> list[dict]:
         m2 = re.search(r'HYPERLINK\("[^"]+","([^"]+)"\)', d_cell)
         if m2:
             filename = m2.group(1)
+        # FORMATTED_VALUE 取得ではD列がラベル文字列になりHYPERLINK式を持たないため、
+        # リンクが取れないときはDrive内検索URLで代替する（報告メールに必ずリンクを載せる）
+        if not link and filename:
+            link = drive_search_url(filename)
 
         # ゴースト行除外: 実フォルダに無いならスキップ
         if filename not in actual_files:
@@ -2216,7 +2259,33 @@ def scan_watch_folder():
     return files
 
 
+def _acquire_single_instance_lock():
+    """二重起動防止のプロセス排他ロックを取得する。
+
+    260701 に secretary.py が2プロセス並走し、同一ファイルへのLLM二重課金・
+    片方が移動済みのファイルでもう片方が「移動失敗」を量産する事故が発生した。
+    取得できなければ None（既に別プロセスが実行中）。
+    """
+    import fcntl
+    f = open(LOCK_PATH, "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    f.write(str(os.getpid()))
+    f.flush()
+    return f
+
+
 def main():
+    lock = _acquire_single_instance_lock()
+    if lock is None:
+        msg = "別の secretary.py が実行中のため終了します（二重起動防止）。"
+        logging.warning(msg)
+        print(msg)
+        return
+
     print("=== 秘書エージェント：ファイル分類開始 ===")
 
     # バックアップ
@@ -2301,6 +2370,7 @@ def main():
     move_failures = []  # (filename, dest, error_message)
     maybe_accounting_in_unknown = []  # (filename,) 分からなかったに入った経理書類候補
     skipped = 0
+    vanished = 0
     duplicate_count = 0
     llm_used = 0
 
@@ -2310,6 +2380,14 @@ def main():
             skipped += 1
             continue
 
+        # スキャン後にDrive同期・手動操作で消えたファイルは静かにスキップ
+        # （LLM課金・Driveメタ取得の前に判定し、移動失敗として警報も出さない）
+        if not os.path.exists(src_path):
+            logging.info(f"消失スキップ: {original_name}（スキャン後にフォルダから消えた）")
+            print(f"  消失スキップ: {original_name}")
+            vanished += 1
+            continue
+
         # スプレッドシートから送信者・件名を取り出して分類ヒントに使う
         meta = filename_index.get(original_name, {})
         sender = meta.get("sender", "")
@@ -2317,10 +2395,12 @@ def main():
 
         # 移動「前」にDriveメタを取得しておく。move後はDrive側のインデックス
         # 同期遅延でファイルが見つからないことが多いため。IDはmove後も不変。
+        # スキャン直後のファイルはDrive未同期が常態のため、リトライは1回に抑える
+        # （retries=3だと未同期ファイル1件あたり約6秒浪費。取れなければ検索リンクで代替）
         src_dir = os.path.dirname(src_path)
         src_folder_id = resolve_drive_folder_id(drive_service, src_dir)
         pre_meta = (
-            fetch_drive_file_meta(drive_service, src_folder_id, original_name)
+            fetch_drive_file_meta(drive_service, src_folder_id, original_name, retries=1)
             if src_folder_id else None
         )
         if not pre_meta:
@@ -2480,6 +2560,8 @@ def main():
 
     if skipped:
         print(f"処理済みスキップ: {skipped}件")
+    if vanished:
+        print(f"消失スキップ: {vanished}件")
     if duplicate_count:
         print(f"重複検出: {duplicate_count}件（pre_trashへ退避）")
     if move_failures:
@@ -2488,12 +2570,14 @@ def main():
         print(f"LLMフォールバック: {llm_used}件")
 
     # 1F: 処理件数照合
-    processed_total = len(file_results) + skipped + duplicate_count + len(move_failures)
+    processed_total = (
+        len(file_results) + skipped + vanished + duplicate_count + len(move_failures)
+    )
     if processed_total != len(files):
         logging.warning(
             f"処理件数不一致: 対象{len(files)}件 vs "
-            f"分類{len(file_results)}+スキップ{skipped}+重複{duplicate_count}"
-            f"+失敗{len(move_failures)}={processed_total}件"
+            f"分類{len(file_results)}+スキップ{skipped}+消失{vanished}"
+            f"+重複{duplicate_count}+失敗{len(move_failures)}={processed_total}件"
         )
         print(f"  ⚠ 処理件数不一致: 対象{len(files)} vs 処理済{processed_total}")
 
@@ -2530,6 +2614,7 @@ def main():
 
     # 「分からなかった」滞留ファイル一覧をシートから再取得（移動・追記後の最新状態で）
     pending_files = []
+    latest_sheet = None
     try:
         latest_sheet = fetch_sheet_data(sheets_service)
         pending_files = _collect_pending_files(latest_sheet)

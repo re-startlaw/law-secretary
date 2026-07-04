@@ -216,3 +216,70 @@ def test_guard_passes_when_client_folder_unresolvable():
     assert s._llm_case_dest_allowed(
         "01_事件記録/ん_終了/ぐ_グエン/連絡文書", [_tamura_client()], "何か",
     ) is True
+
+
+# ── 汎用送信元（スキャナー・eFax）の学習・照合除外 ──────────────────
+
+def _routing_rows(n, sender, subject, dest):
+    """保存ログ形式の行（A..E列）を n 行生成する。"""
+    return [["時刻", subject, sender, f"f{i}.pdf", dest] for i in range(n)]
+
+
+def test_routing_skips_scanner_sender():
+    """送信者=米谷スキャン/件名=なし は何件あっても学習しない（260701誤爆の再発防止）。"""
+    header = [["保存日時", "件名", "送信者", "ファイル名", "移動先"]]
+    rows = _routing_rows(10, "米谷スキャン", "なし", "01_事件記録/た_田村正宣/02_身体拘束関係")
+    routing, stats = s.build_sender_subject_routing(header + rows)
+    assert routing == {}
+
+
+def test_routing_skips_efax_sender():
+    """eFax汎用アドレスも学習しない。"""
+    header = [["保存日時", "件名", "送信者", "ファイル名", "移動先"]]
+    rows = _routing_rows(5, "eFax <message@inbound.efax.com>", "着信FAX", "01_事件記録/た_田村正宣/06_裁判所手続")
+    routing, stats = s.build_sender_subject_routing(header + rows)
+    assert routing == {}
+
+
+def test_routing_learns_normal_sender():
+    """通常の送信者＋実件名は従来どおり学習する。"""
+    header = [["保存日時", "件名", "送信者", "ファイル名", "移動先"]]
+    rows = _routing_rows(3, '"照井奈央" <nao@teruiglobal.jp>', "陳述書の件", "01_事件記録/ふ_ファム・ティ・フォン")
+    routing, stats = s.build_sender_subject_routing(header + rows)
+    assert ("nao@teruiglobal.jp", "陳述書の件") in routing
+
+
+def test_lookup_ignores_generic_subject():
+    """照合側でも 件名=なし はヒットさせない（旧データに学習済みキーが残っても無害化）。"""
+    s.LEARNED_ROUTING[("米谷スキャン", "なし")] = "01_事件記録/た_田村正宣/02_身体拘束関係"
+    try:
+        assert s.lookup_learned_route("米谷スキャン", "なし") is None
+    finally:
+        s.LEARNED_ROUTING.pop(("米谷スキャン", "なし"), None)
+
+
+def test_email_index_skips_generic_addresses():
+    """noreply・スキャン系アドレスはメアド→依頼者学習の対象外。"""
+    header = [["保存日時", "件名", "送信者", "ファイル名", "移動先"]]
+    rows = [
+        ["時刻", "x", "noreply@example.com", "a.pdf", "01_事件記録/た　田村正宣/10_メモ"],
+        ["時刻", "y", "scan001@office.jp", "b.pdf", "01_事件記録/た　田村正宣/10_メモ"],
+        ["時刻", "z", "nao@teruiglobal.jp", "c.pdf", "01_事件記録/ふ_ファム・ティ・フォン/資料"],
+    ]
+    clients = [
+        _client("た　田村正宣", "田村正宣", "/x/tam", "criminal"),
+        _client("ふ_ファム・ティ・フォン", "ふ_ファム・ティ・フォン", "/x/pham"),
+    ]
+    index, stats = s.build_sender_email_index(header + rows, clients)
+    assert "noreply@example.com" not in index
+    assert "scan001@office.jp" not in index
+    assert index.get("nao@teruiglobal.jp") == "ふ_ファム・ティ・フォン"
+
+
+# ── LLMファイル名検証（分類経路でも適用）──────────────────────────
+
+def test_validate_llm_filename_rejects_path_and_ext():
+    assert s._validate_llm_filename("../evil.pdf", "a.pdf") is None
+    assert s._validate_llm_filename("サブ/名前.pdf", "a.pdf") is None
+    assert s._validate_llm_filename("260701_書類.docx", "a.pdf") is None
+    assert s._validate_llm_filename("260701_書類.pdf", "a.pdf") == "260701_書類.pdf"
