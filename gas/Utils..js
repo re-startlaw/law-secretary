@@ -10,11 +10,14 @@ function getSettingsFromSheet() {
   }
 
   // 画像の配置に合わせてセルを直接指定
+  const model = sheet.getRange('B2').getValue();
+  const generationModel = sheet.getRange('B6').getValue();
   return {
-    model: sheet.getRange('B2').getValue(),    // AIモデル
+    model: model,    // AIモデル（返信要否判定用）
     example: sheet.getRange('B3').getValue(),  // メール例文
     context: sheet.getRange('B4').getValue(),  // コンテキスト情報
-    criteria: sheet.getRange('B5').getValue()  // 返信判断基準
+    criteria: sheet.getRange('B5').getValue(),  // 返信判断基準
+    generationModel: generationModel || model  // AIモデル（本文生成用。未設定ならB2を流用）
   };
 }
 
@@ -67,11 +70,17 @@ function extractEmail_(fromField) {
 }
 
 function hasYonetaniSalutation_(body) {
-  const firstLines = String(body || '')
+  const substantiveLines = String(body || '')
     .split(/\r?\n/)
-    .slice(0, 3)
-    .join('\n');
-  return /米谷|先生/.test(firstLines);
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) return false; // 空行除外
+      if (/^https?:\/\//i.test(line)) return false; // URLのみの行除外
+      if (/^\[?(image|画像)[:：]/i.test(line)) return false; // 画像代替テキストらしい行除外
+      return true;
+    })
+    .slice(0, 5);
+  return /米谷|先生/.test(substantiveLines.join('\n'));
 }
 
 function extractEmailsFromText_(text) {
@@ -188,6 +197,17 @@ function evaluateStaticReplyNecessity_(sender, subject, body, originalTo, origin
     };
   }
 
+  const toEmails = extractEmailsFromText_(originalTo).map((e) => e.toLowerCase());
+  const ownerEmailsLower = CONFIG.OWNER_EMAILS.map((e) => String(e || '').toLowerCase());
+  const myEmailLower = String(myEmail || '').toLowerCase();
+  const isAddressedToMe = toEmails.some((e) => e === myEmailLower || ownerEmailsLower.indexOf(e) >= 0);
+  if (!isAddressedToMe) {
+    return {
+      needsReply: false,
+      reason: '自分がToに含まれず、CCまたはBCCのみの受信のため返信不要としました。'
+    };
+  }
+
   if (!hasYonetaniSalutation_(bodyText)) {
     return {
       needsReply: false,
@@ -234,7 +254,7 @@ function collectMyBodies_(query, max) {
       if (!from || from !== myEmail) continue;
       const body = stripQuotedReplies_(m.getPlainBody() || '');
       if (body.length < 30) continue; // 短すぎるリプライは文体学習に不向き
-      bodies.push(body.substring(0, 800));
+      bodies.push(body.substring(0, 1500));
     }
   }
   return bodies;
@@ -313,7 +333,7 @@ function classifySenderRisk_(sender, subject, body) {
     instruction: [
       'この相手は通常相手として扱う。',
       '丁寧だが簡潔にし、必要な返答・依頼・保留事項だけを書く。',
-      '法律判断、事件方針、見通しは通常相手でも必ず【要回答】にする。'
+      '法律判断、事件方針、見通しは通常相手でも必ず本文中に【要確認】を埋め込む。'
     ].join('\n')
   };
 }
@@ -381,37 +401,219 @@ function buildReplyHtmlBody_(plainDraftBody, lastMessage) {
 }
 
 /**
- * AI出力を固定フォーマットでGmail下書き本文にする
+ * 宛名候補を決定する。
+ * 優先順位: ①過去にその相手へ送った自分のメールの冒頭宛名 → ②受信メール本文末尾の署名 → ③From表示名
+ * どれも確信が持てなければ null（呼び出し側で「【要確認】様」を使う）
  */
-function formatDraftBody_(parsed, rawResponse, riskProfile) {
-  if (!parsed || typeof parsed !== 'object') {
-    // 解析失敗時は送信せず確認用。誤送信防止のため明示する
-    return [
-      '※AI出力をJSONとして解析できませんでした。送信せず内容を確認してください。',
-      '',
-      '【AI出力】',
-      String(rawResponse || '').substring(0, 2000)
-    ].join('\n');
+function resolveRecipientName_(senderDisplay, receivedBody, pastSentBodies) {
+  // ① 過去送信メールの1行目から宛名を抽出（最新のものを優先）
+  for (const sentBody of (pastSentBodies || [])) {
+    const firstLine = String(sentBody || '').split(/\r?\n/).map((l) => l.trim()).find((l) => l);
+    if (!firstLine) continue;
+    const m = firstLine.match(/^(.{1,20}?)(様|先生|さん|御中)/);
+    if (m && m[1].trim()) {
+      return { name: m[1].trim(), honorific: m[2], source: 'past' };
+    }
   }
 
-  const placeholders = normalizeStringArray_(parsed.placeholders, 10, 120);
+  // ② 受信本文の末尾署名（最終5行程度）から日本語氏名らしい行を探す
+  const bodyLines = String(receivedBody || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l);
+  const tail = bodyLines.slice(-5);
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const line = tail[i];
+    const m = line.match(/^([一-龠ぁ-んァ-ヶー]{1,10})(様|先生|さん)?$/);
+    if (m && /[一-龠ぁ-んァ-ヶー]/.test(m[1])) {
+      return { name: m[1], honorific: m[2] || '様', source: 'signature' };
+    }
+  }
+
+  // ③ From表示名（"名前 <mail>" の名前部）。日本語を含み、会社名等でなければ採用
+  const fromMatch = String(senderDisplay || '').match(/^"?([^"<]+?)"?\s*<[^>]+>\s*$/);
+  if (fromMatch) {
+    const name = fromMatch[1].trim();
+    const looksLikeOrg = /(株式会社|有限会社|合同会社|法律事務所|事務所|センター|協会|組合|株式会社|Inc\.|Corp\.|LLC)/i.test(name);
+    if (name && /[一-龠ぁ-んァ-ヶー]/.test(name) && !looksLikeOrg) {
+      return { name, honorific: '様', source: 'from' };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 下書き先頭行に宛名（様/先生/御中）がなければ強制挿入するガード
+ */
+function ensureSalutation_(draftText, resolvedName) {
+  const text = String(draftText || '');
+  const lines = text.split(/\r?\n/);
+  const firstNonEmptyIdx = lines.findIndex((l) => l.trim());
+  const firstLine = firstNonEmptyIdx >= 0 ? lines[firstNonEmptyIdx] : '';
+
+  if (/(様|先生|御中)/.test(firstLine)) return text;
+
+  const salutation = resolvedName ? `${resolvedName.name}${resolvedName.honorific}` : '【要確認】様';
+  return [salutation, '', text].join('\n');
+}
+
+/**
+ * AI出力を固定フォーマットでGmail下書き本文にする。
+ * 【要入力】【要確認】は本文中にインライン化済みの前提で、署名後の別ブロックは作らない。
+ * riskFlags はログ記録用としてのみ返す（下書き本文には含めない）。
+ */
+function formatDraftBody_(parsed, rawResponse, riskProfile, resolvedName) {
+  if (!parsed || typeof parsed !== 'object') {
+    // 解析失敗時は送信せず確認用。誤送信防止のため明示する
+    return {
+      body: [
+        '※AI出力をJSONとして解析できませんでした。送信せず内容を確認してください。',
+        '',
+        '【AI出力】',
+        String(rawResponse || '').substring(0, 2000)
+      ].join('\n'),
+      riskFlags: []
+    };
+  }
+
   const riskFlags = normalizeStringArray_(parsed.riskFlags, 10, 160);
   const draft = String(parsed.draft || '').trim()
     || 'ご連絡ありがとうございます。\n内容を確認のうえ、改めてご連絡いたします。';
 
-  // そのまま送れる本文＋署名をクリーンに出力する。
-  const parts = [draft, '', '米谷尚起'];
+  const draftWithSalutation = ensureSalutation_(draft, resolvedName);
+  const body = [draftWithSalutation, '', '米谷尚起'].join('\n');
 
-  // AIが未確定箇所・リスクを検出したときだけ、本文・署名の下に注記として残す。
-  if (placeholders.length > 0) {
-    parts.push('', '【要入力】');
-    placeholders.forEach((item) => parts.push(`- ${item}`));
+  return { body, riskFlags };
+}
+
+/**
+ * 「推奨設定を適用」で設定シートB2〜B6に書き込む文言。
+ * docs/mail_auto_reply_settings.md のマスターと内容を一致させること。
+ */
+const RECOMMENDED_SETTINGS_ = {
+  model: 'gemini-2.5-flash',
+  generationModel: 'gemini-2.5-pro',
+  example: [
+    '渡邊様',
+    '',
+    'お世話になっております。',
+    'ニューフォーカス株式会社との間の契約書レビューが完了致しましたので送付致します。',
+    'ご不明な点がございましたら何でもお尋ね下さい。',
+    '',
+    'それと、差し支えなければ先方にお戻しした契約書のご共有を頂ければ、御社の重視しているポイントの把握等、次回以降のリーガルチェックに役立てさせていただきます。（これを拝見する時間についてはタイムチャージは頂きません。）',
+    '',
+    '引き続きよろしくお願いいたします。',
+    '',
+    '',
+    '米谷尚起',
+    '',
+    '【文体利用ルール】',
+    '- この例文は文体・長さ・敬称・結びの参考に限る。',
+    '- 文章を忠実に模倣せず、相手や案件に応じて簡潔に書く。',
+    '- 本文の長さ・温度感は、この例文および過去送信メール例に合わせる。事務的すぎる素っ気ない文面にしない。',
+    '- 相手の発言を長くオウム返ししない。事情への反応は原則1文、多くても2文までにする。',
+    '  - NG例:「〇月〇日に貴社より契約書のドラフトをお送りいただき、その内容について3点のご質問をいただいた件、確かに拝受いたしました。ご質問の1点目は…」',
+    '  - OK例:「契約書ドラフトの件、ご質問3点を確認いたしました。」',
+    '- 温度感（気遣い・丁寧さ）は挨拶・結び・気遣いの一文で出す。相手の発言の要約部分では出さない。',
+    '- 署名はAI本文に入れず、スクリプト側が下書き本文末尾に「米谷尚起」を自動付与する。'
+  ].join('\n'),
+  context: [
+    '弁護士　米谷尚起が作成するメールです。',
+    'no-reply@mail.coconala.comから届いたメールについては、このアドレスではなく、本文中記載の依頼者のメールアドレスに返信する。',
+    '【返信文作成の特別ルール】',
+    '以下のケースでは、通常の返信と異なる対応を行ってください。',
+    '',
+    '1. **送信元が "no-reply@mail.coconala.com" の場合**',
+    '   - 件名が「[ココナラ法律相談] お問い合わせメールが届いています」の場合、送信元ではなく、本文中に記載されている「依頼者のメールアドレス」宛ての返信文として作成してください。',
+    '   - **内容の指示**: 相談内容を読み取り、「刑事事件の加害者側」からの相談であれば受任を検討する前向きな内容にしてください。それ以外（民事、離婚、相続など）の依頼については、現在業務過多のためお引き受けできないという丁寧なお断りのメールを作成してください。',
+    '',
+    '【安全ルール】',
+    '- AIは最終判断者ではなく、送信前に弁護士が必ず確認・修正する下書きだけを作る。',
+    '- 法律判断、事件方針、見通しは断定せず、本文中のその箇所に直接「【要確認】」を埋め込む（本文の外に注記を作らない）。',
+    '- 金額、期限、日付、提出期限、支払期限は勝手に埋めず、本文中のその箇所に「【要入力：金額】」「【要入力：期限】」「【要入力：日付】」の形で埋め込む。',
+    '- 謝罪、譲歩、責任認定、事実認定に見える表現は避ける。',
+    '- 裁判所、検察庁、警察、弁護士、相手方代理人、公的機関向けは、短く硬く保留寄りの文面にする。'
+  ].join('\n'),
+  criteria: [
+    '# 判定ロジック（上から順に適用し、該当したら即座に判定を確定すること）',
+    '',
+    '## 【最優先：返信不要（FALSE）の条件】',
+    '以下のいずれかに該当する場合は、内容に関わらず「FALSE」とする。',
+    '',
+    '1. **ブラックリスト（送信元アドレス）**',
+    '   以下のドメインまたはアドレスからのメール：',
+    '   - no-reply@printing.ne.jp',
+    '   - t-hoso-ml@googlegroups.com',
+    '   - shinwazenki@googlegroups.com',
+    '   - noreply@tm.openai.com',
+    '   - noreply-apps-scripts-notifications@google.com',
+    '   - noreply@appsheet.com',
+    '   - n.kometani@re-startlaw.com',
+    '   - nobukosato2020@gmail.com',
+    '   - support@myteam108.jp',
+    '',
+    '2. **ブラックリスト（件名）**',
+    '   件名に以下の文字列を含むもの：',
+    '   - [t-hoso-ml:',
+    '   - [shinwazenki',
+    '',
+    '3. **自分自身への送信**',
+    '   送信元（From）が自分のメールアドレスである場合。',
+    '',
+    '4. **CC受信**',
+    '   自分のメールアドレスが「To」に含まれておらず、「CC」または「BCC」にのみ含まれている場合。',
+    '',
+    '5. **宛名不在**',
+    '   メール本文冒頭の実質的な行（空行・URLのみの行・画像代替テキストのような行を除いた先頭5行）に「米谷」または「先生」という氏名の記載が見当たらない場合。',
+    '',
+    '6. **自動送信・一斉配信**',
+    '   - 自動生成されたシステムメッセージ',
+    '   - 一方的なお知らせ、ニュースレター、メルマガ',
+    '   - メーリングリスト経由の周知メール',
+    '',
+    '## 【返信必要（TRUE）の条件】',
+    '上記の「返信不要」条件に該当しない場合で、以下に該当するものは「TRUE」とする。',
+    '',
+    '1. **ココナラ法律相談**',
+    '   送信元が "no-reply@mail.coconala.com" で、件名が「[ココナラ法律相談] お問い合わせメールが届いています」の場合。',
+    '   ※システムメールだが、これは例外的に返信が必要。',
+    '',
+    '2. **質問・依頼・重要連絡**',
+    '   - 相手からの質問や依頼が含まれている。',
+    '   - 個人的なメッセージや重要な業務連絡である。',
+    '',
+    '## 【デフォルト】',
+    '上記いずれにも明確に当てはまらない場合は、迷ったら下書き作成対象にする。ただし、明確なFALSE条件がある場合はそちらを優先する。'
+  ].join('\n')
+};
+
+/**
+ * 設定シートB2〜B6に推奨文言を書き込む（実行前に確認ダイアログ）
+ */
+function applyRecommendedSettings() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    '推奨設定を適用',
+    'B2〜B6に推奨のプロンプト文言・モデル設定を書き込みます。現在の内容は上書きされます。よろしいですか？',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response !== ui.Button.OK) return;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEET_SETTINGS);
+  if (!sheet) {
+    ui.alert(`「${CONFIG.SHEET_SETTINGS}」シートが見つかりません。`);
+    return;
   }
 
-  if (riskFlags.length > 0) {
-    parts.push('', '【要確認】');
-    riskFlags.forEach((item) => parts.push(`- ${item}`));
-  }
+  sheet.getRange('B2').setValue(RECOMMENDED_SETTINGS_.model);
+  sheet.getRange('B3').setValue(RECOMMENDED_SETTINGS_.example);
+  sheet.getRange('B4').setValue(RECOMMENDED_SETTINGS_.context);
+  sheet.getRange('B5').setValue(RECOMMENDED_SETTINGS_.criteria);
+  sheet.getRange('A6').setValue('生成用AIモデル');
+  sheet.getRange('B6').setValue(RECOMMENDED_SETTINGS_.generationModel);
+  sheet.getRange('C6').setValue('返信文生成に使うAIモデル（返信要否判定はB2のモデルを使用）');
 
-  return parts.join('\n');
+  ui.alert('推奨設定を適用しました。');
 }

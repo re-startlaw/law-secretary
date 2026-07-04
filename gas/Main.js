@@ -18,6 +18,7 @@ function onOpen() {
     .addItem('未読メールを処理 (手動実行)', 'processUnreadEmails')
     .addSeparator()
     .addItem('Gemini APIキーの設定', 'setApiKey')
+    .addItem('推奨設定を適用', 'applyRecommendedSettings')
     .addToUi();
 }
 
@@ -71,8 +72,9 @@ function processUnreadEmails() {
       
       if (replyDecision.needsReply) {
         // 2. 返信文面の生成
-        const draftBody = generateReplyBody(apiKey, settings, sender, subject, body);
-        
+        const draftResult = generateReplyBody(apiKey, settings, sender, subject, body);
+        const draftBody = draftResult.body;
+
         // 3. 返信モード決定（通常は全員返信／ココナラ等no-replyは本文中の依頼者メールへ直接送る）
         const target = resolveReplyTarget_(sender, subject, body, myEmail);
         const htmlBody = buildReplyHtmlBody_(draftBody, lastMessage);
@@ -82,12 +84,14 @@ function processUnreadEmails() {
         // そこで createDraftReply（宛先=送信者のみ、自動追加なし）を使い、送信者以外の宛先は
         // 自分を除外した cc として明示的に追加する。これで自分は確実に宛先から外れる。
         const replyAllCc = buildReplyAllCc_(sender, originalTo, originalCc, myEmail);
+        // 元件名が既に「Re:」付きなら重複させない
+        const replySubject = /^\s*re:/i.test(subject) ? subject : 'Re: ' + subject;
 
         // 引用付きで下書き作成を試み、失敗したら引用なしで再試行する
         let draftCreated = false;
         try {
           if (target.mode === 'direct') {
-            GmailApp.createDraft(target.to, 'Re: ' + subject, draftBody, { htmlBody });
+            GmailApp.createDraft(target.to, replySubject, draftBody, { htmlBody });
           } else {
             lastMessage.createDraftReply(draftBody, { htmlBody, cc: replyAllCc });
           }
@@ -97,15 +101,19 @@ function processUnreadEmails() {
         }
         if (!draftCreated) {
           if (target.mode === 'direct') {
-            GmailApp.createDraft(target.to, 'Re: ' + subject, draftBody);
+            GmailApp.createDraft(target.to, replySubject, draftBody);
           } else {
             lastMessage.createDraftReply(draftBody, { cc: replyAllCc });
           }
         }
-        
+
         thread.addLabel(labelDraft);
-        
-        logToSheet(sender, subject, 'ドラフト作成成功', mailUrl, replyDecision.reason);
+
+        let logDetail = replyDecision.reason;
+        if (draftResult.riskFlags && draftResult.riskFlags.length > 0) {
+          logDetail += ' / リスク: ' + draftResult.riskFlags.join('; ');
+        }
+        logToSheet(sender, subject, 'ドラフト作成成功', mailUrl, logDetail);
       } else {
         thread.addLabel(labelNoReply);
         logToSheet(sender, subject, '返信不要と判断', mailUrl, replyDecision.reason);
@@ -161,25 +169,34 @@ ${body.substring(0, 3000)}
 
 /**
  * 返信文生成
- * 文体の参考として、相手への過去送信メール（最大2通）を短く注入する。
- * AI出力はJSONで受け、Gmail下書き本文はスクリプト側で固定整形する。
+ * 文体の参考として、相手への過去送信メール（最大5通）を注入する。
+ * AI出力はJSONで受け、Gmail下書き本文はスクリプト側で固定整形する（宛名ガード込み）。
  */
 function generateReplyBody(apiKey, settings, sender, subject, body) {
   const senderEmail = extractEmail_(sender);
   const riskProfile = classifySenderRisk_(sender, subject, body);
-  let examples = fetchSentExamplesForRecipient(senderEmail, 2);
+  let examples = fetchSentExamplesForRecipient(senderEmail, 5);
   let exampleHeader;
 
   if (examples.length > 0) {
-    exampleHeader = `【過去にこの相手（${senderEmail}）へ送ったメール（敬称・結び・段落長の参考に限る）】`;
+    exampleHeader = `【過去にこの相手（${senderEmail}）へ送ったメール（文体・長さ・温度感の参考）】`;
   } else {
-    examples = fetchRecentSentExamples(2);
-    exampleHeader = '【直近送信メール（敬称・結び・段落長の参考に限る）】';
+    examples = fetchRecentSentExamples(5);
+    exampleHeader = '【直近送信メール（文体・長さ・温度感の参考）】';
   }
 
   const examplesBlock = examples.length === 0
     ? '（過去の送信メールが取得できませんでした）'
     : examples.map((e, i) => `---例${i + 1}---\n${e}`).join('\n\n');
+
+  const resolvedName = resolveRecipientName_(sender, body, examples);
+  const nameCandidateText = resolvedName
+    ? `${resolvedName.name}${resolvedName.honorific}（根拠: ${
+        resolvedName.source === 'past' ? '過去の送信メールの宛名'
+          : resolvedName.source === 'signature' ? '受信メール末尾の署名'
+          : 'Fromの表示名'
+      }）`
+    : '確信の持てる候補なし';
 
   console.log(`few-shot: recipient=${senderEmail}, samples=${examples.length}`);
 
@@ -189,9 +206,7 @@ function generateReplyBody(apiKey, settings, sender, subject, body) {
 
 必ず次のJSONだけを出力してください。
 {
-  "memo": ["相手の要望・用件メモ。1〜3項目。各項目は短く"],
-  "draft": "相手に送る本文案。署名なし。短く簡潔に。",
-  "placeholders": ["人間が差し替えるべき箇所。なければ空配列"],
+  "draft": "相手に送る本文案。署名なし。1行目は必ず宛名にする。",
   "riskFlags": ["法律判断・事件方針・見通し・謝罪・譲歩・事実認定などの注意点。なければ空配列"]
 }
 
@@ -201,14 +216,22 @@ ${settings.context}
 【文体ルール・参考例文】
 ${settings.example}
 
+【宛名ルール】
+- draft の1行目は必ず宛名にする（本文の他の部分ではなく、必ず1行目）。
+- 宛名候補: ${nameCandidateText}
+- 上記候補に確信が持てない場合は「【要確認】様」とする。
+
 【最重要ルール】
 - 相手の発言をオウム返ししない。本文で事情に触れるのは原則1文、多くても2文。
-- 法律判断、事件方針、見通しは断定しない。本文中では「〜については、【要回答】」の形で残す。
-- 金額、期限、日付、提出期限、支払期限は勝手に決めない。「【要入力：金額】」「【要入力：期限】」「【要入力：日付】」のように残す。
+  - NG例:「〇月〇日に貴社より契約書のドラフトをお送りいただき、その内容について3点のご質問をいただいた件、確かに拝受いたしました。ご質問の1点目は…」
+  - OK例:「契約書ドラフトの件、ご質問3点を確認いたしました。」
+- 下書き本文の長さ・温度感は、下記の過去メール例に合わせる。3〜6行等の固定の長さ制限は設けない。事務的すぎる文面にしない。
+- 温度感（気遣い・丁寧さ）は挨拶・結び・気遣いの一文で出す。相手の発言の要約部分では出さない。
+- 法律判断、事件方針、見通しは断定しない。未確定な箇所は、本文中のその場所に直接「【要確認】」を埋め込む（本文の外に注記を作らない）。
+- 金額、期限、日付、提出期限、支払期限は勝手に決めない。本文中のその場所に「【要入力：金額】」「【要入力：期限】」「【要入力：日付】」のように埋め込む。
 - 「可能です」「請求できます」「勝てます」「違法です」「問題ありません」などの法的結論を作らない。
 - 謝罪、譲歩、責任認定、事実認定に見える表現を避ける。
 - 署名は入れない。
-- 下書き本文は、原則として挨拶を除き3〜6行程度にする。
 
 【相手種別による安全モード】
 ${riskProfile.instruction}
@@ -222,9 +245,9 @@ ${examplesBlock}
 本文:
 ${body.substring(0, 3000)}
 `;
-  const response = callGeminiApi(apiKey, settings.model, prompt);
+  const response = callGeminiApi(apiKey, settings.generationModel, prompt);
   const parsed = parseJsonFromGeminiResponse_(response);
-  return formatDraftBody_(parsed, response, riskProfile);
+  return formatDraftBody_(parsed, response, riskProfile, resolvedName);
 }
 
 /**
