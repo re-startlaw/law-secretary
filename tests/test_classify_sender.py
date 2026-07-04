@@ -298,3 +298,28 @@ def test_special_rule_detects_pria_in_content():
 
 def test_special_rule_none_without_pria():
     assert s.classify_special_document("20260702_管理規約集.pdf", "何の変哲もない本文") is None
+
+
+# ── NFC/NFD正規化（listdir名とシート名の突合）─────────────────────
+
+def test_filename_index_matches_nfd_name():
+    """シート上のNFC名を、macOS listdir由来のNFD名で引ける。"""
+    import unicodedata
+    nfc_name = unicodedata.normalize("NFC", "260702_書類送付のご案内.pdf")
+    nfd_name = unicodedata.normalize("NFD", nfc_name)
+    assert nfc_name != nfd_name  # 前提: 濁点分解で別文字列
+    header = [["保存日時", "件名", "送信者", "ファイル名", "移動先"]]
+    rows = [["時刻", "件名x", "送信者y", nfc_name, "04_事務/各種書類/社宅関係"]]
+    index = s.build_filename_index(header + rows)
+    assert s._nfc(nfd_name) in index
+    assert index[s._nfc(nfd_name)]["dest"] == "04_事務/各種書類/社宅関係"
+
+
+# ── サブフォルダ表記揺れの実在フォルダ解決（12_精算？ vs 12_精算）──────
+
+def test_resolve_client_dest_fuzzy_seisan(tmp_path):
+    """キーワードマップは 12_精算？ だが実フォルダが 12_精算 の場合、実在側を使う。"""
+    c = _client("た_田村正宣", "田村正宣", str(tmp_path), "criminal")
+    os.makedirs(os.path.join(c["path"], "12_精算"), exist_ok=True)
+    dest = s._resolve_client_dest(c, s._norm_text("260703_謄写代精算領収証"))
+    assert dest == os.path.join(c["path"], "12_精算")
