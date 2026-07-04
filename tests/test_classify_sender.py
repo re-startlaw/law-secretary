@@ -283,3 +283,18 @@ def test_validate_llm_filename_rejects_path_and_ext():
     assert s._validate_llm_filename("サブ/名前.pdf", "a.pdf") is None
     assert s._validate_llm_filename("260701_書類.docx", "a.pdf") is None
     assert s._validate_llm_filename("260701_書類.pdf", "a.pdf") == "260701_書類.pdf"
+
+
+# ── 本文特別ルール（社宅=プリア常盤台）────────────────────────────
+
+def test_special_rule_detects_pria_in_content():
+    """本文にだけ「プリア常盤台」が現れるスキャン書類も社宅関係に判定できる。"""
+    dest = s.classify_special_document(
+        "20260702_管理規約集.pdf",
+        "米谷スキャン なし プリア常盤台パークフロント 管理規約集 第1条…",
+    )
+    assert dest is not None and dest.endswith("04_事務/各種書類/社宅関係")
+
+
+def test_special_rule_none_without_pria():
+    assert s.classify_special_document("20260702_管理規約集.pdf", "何の変哲もない本文") is None
