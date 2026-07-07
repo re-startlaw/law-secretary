@@ -17,6 +17,7 @@ const state = {
   wareki: false,
   openShas: [],      // インライン展開中の文書（複数同時オープン＝タブ表示）
   openPages: {},     // sha -> 初期ページ（検索から開いた場合）
+  openQueries: {},   // sha -> 初期検索クエリ（検索タブから開いた場合）
 };
 
 const EVIDENCE_TABS = [
@@ -37,6 +38,7 @@ const COLUMNS = [
   { key: "author", label: "作成者", sortable: true, cls: "col-author" },
   { key: "memo", label: "メモ", sortable: true, cls: "col-memo" },
   { key: "page_count", label: "page", sortable: true, cls: "col-page" },
+  { key: "_pdf_icon", label: "別タブ", sortable: false, cls: "col-pdf-icon" },
 ];
 
 // ---- 符号の自然順キー（server の evidence_sort_key と一致） -------------
@@ -122,6 +124,9 @@ function sortDocuments(docs) {
   return keyed.map((x) => x.d);
 }
 
+// マウント中の ViewerInstance を sha → instance で管理（ライフサイクル課題①）
+const _mountedViewers = new Map();
+
 // ---- レンダリング ------------------------------------------------------
 function renderEvidenceTabs() {
   const wrap = document.getElementById("evidence-tabs");
@@ -144,6 +149,14 @@ function renderEvidenceTabs() {
 }
 
 function renderTable() {
+  // 既存インスタンスをすべて destroy してからテーブルを再構築（課題① ライフサイクル整理）
+  for (const [sha, inst] of _mountedViewers) {
+    if (!state.openShas.includes(sha)) {
+      try { inst.destroy(); } catch {}
+      _mountedViewers.delete(sha);
+    }
+  }
+
   const docs = sortDocuments(visibleDocuments());
   document.getElementById("doc-count").textContent = `${docs.length} 件`;
 
@@ -201,13 +214,37 @@ function renderTable() {
     row.appendChild(buildMemoCell(d));
     row.appendChild(td(d.page_count == null ? "" : String(d.page_count), "col-page"));
 
+    // PDF 別タブアイコン列（④a）
+    const pdfIconTd = td("", "col-pdf-icon");
+    if (d.kind === "pdf") {
+      const link = document.createElement("a");
+      link.href = `/static/doc.html?case=${encodeURIComponent(state.caseId)}&sha=${d.sha256}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.title = "別タブで開く";
+      link.textContent = "📄";
+      link.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(link.href, "_blank", "noopener");
+      });
+      link.addEventListener("click", (e) => e.stopPropagation());
+      pdfIconTd.appendChild(link);
+    }
+    row.appendChild(pdfIconTd);
+
     row.onclick = (e) => {
       if (e.target.closest(".memo-edit")) return;  // メモ編集中はトグルしない
+      if (e.target.closest(".col-pdf-icon")) return;  // PDFアイコンは行トグルしない
       toggleRow(d, row);
     };
     tbody.appendChild(row);
 
     if (state.openShas.includes(d.sha256)) {
+      // 既存インスタンスがあれば再利用せず再生成（DOM 再構築のため）
+      const oldInst = _mountedViewers.get(d.sha256);
+      if (oldInst) { try { oldInst.destroy(); } catch {} _mountedViewers.delete(d.sha256); }
+
       const exp = document.createElement("tr");
       exp.className = "viewer-row";
       const cell = document.createElement("td");
@@ -216,11 +253,14 @@ function renderTable() {
       exp.appendChild(cell);
       tbody.appendChild(exp);
       const initialPage = state.openPages[d.sha256];
+      const initialQuery = state.openQueries[d.sha256];
       delete state.openPages[d.sha256];
-      mountInlineViewer(d, cell, {
+      delete state.openQueries[d.sha256];
+      const inst = mountInlineViewer(d, cell, {
         caseId: state.caseId,
         documents: docs,
         initialPage,
+        initialQuery,
         onClose: () => { closeDoc(d.sha256); },
         onNavigate: (sha) => {
           const i = state.openShas.indexOf(d.sha256);
@@ -237,6 +277,7 @@ function renderTable() {
           if (doc) Object.assign(doc, fields);
         },
       });
+      if (inst) _mountedViewers.set(d.sha256, inst);
     }
   }
 }
@@ -256,6 +297,8 @@ function toggleRow(d, row) {
 function closeDoc(sha) {
   const i = state.openShas.indexOf(sha);
   if (i >= 0) state.openShas.splice(i, 1);
+  const inst = _mountedViewers.get(sha);
+  if (inst) { try { inst.destroy(); } catch {} _mountedViewers.delete(sha); }
   renderTabs();
   renderTable();
 }
@@ -375,6 +418,9 @@ function badge(text, cls) {
 async function loadDocuments() {
   const res = await fetch(`/api/cases/${encodeURIComponent(state.caseId)}/documents`);
   const data = await res.json();
+  // 事件切替時に既存インスタンスを全 destroy
+  for (const [, inst] of _mountedViewers) { try { inst.destroy(); } catch {} }
+  _mountedViewers.clear();
   // 自然順で安定 ID を付与（フィルタに依らない通し番号）。
   const docs = (data.documents || []).slice();
   docs.sort((a, b) => cmpArr(evidenceSortKey(a.evidence_no), evidenceSortKey(b.evidence_no)));
@@ -382,6 +428,7 @@ async function loadDocuments() {
   state.documents = docs;
   state.openShas = [];
   state.openPages = {};
+  state.openQueries = {};
 
   // 現事件の reindex/has_index を取得してボタン・案内バーを更新。
   const picker = document.getElementById("case-picker");
@@ -618,11 +665,23 @@ function showNoIndexBar(caseMeta) {
 
 // ---- 事件追加モーダル --------------------------------------------------
 async function openAddCaseModal() {
-  const frag = document.createDocumentFragment();
+  const wrapper = document.createElement("div");
 
   const h2 = document.createElement("h2");
   h2.textContent = "事件を追加";
-  frag.appendChild(h2);
+  wrapper.appendChild(h2);
+
+  // 既存登録 / 新規作成 切替ボタン
+  let mode = "existing"; // "existing" | "new"
+  const toggle = document.createElement("div");
+  toggle.className = "modal-mode-toggle";
+  const btnExisting = document.createElement("button");
+  btnExisting.textContent = "既存フォルダを登録";
+  btnExisting.className = "active";
+  const btnNew = document.createElement("button");
+  btnNew.textContent = "新規フォルダを作成";
+  toggle.append(btnExisting, btnNew);
+  wrapper.appendChild(toggle);
 
   // 事件名
   const nameRow = document.createElement("div");
@@ -633,9 +692,9 @@ async function openAddCaseModal() {
   nameInput.type = "text";
   nameInput.placeholder = "空欄の場合はフォルダ名から自動設定";
   nameRow.append(nameLbl, nameInput);
-  frag.appendChild(nameRow);
+  wrapper.appendChild(nameRow);
 
-  // フォルダパス
+  // --- 既存モード: フォルダパス ---
   const pathRow = document.createElement("div");
   pathRow.className = "modal-row";
   const pathLbl = document.createElement("label");
@@ -647,12 +706,48 @@ async function openAddCaseModal() {
   pickBtn.className = "tb-btn";
   pickBtn.textContent = "フォルダを選択…";
   pathRow.append(pathLbl, pathInput, pickBtn);
-  frag.appendChild(pathRow);
+  wrapper.appendChild(pathRow);
+
+  // --- 新規モード: 親フォルダ + フォルダ名 ---
+  const parentRow = document.createElement("div");
+  parentRow.className = "modal-row";
+  parentRow.style.display = "none";
+  const parentLbl = document.createElement("label");
+  parentLbl.textContent = "親フォルダ";
+  const parentInput = document.createElement("input");
+  parentInput.type = "text";
+  parentInput.placeholder = "/path/to/親フォルダ";
+  const pickParentBtn = document.createElement("button");
+  pickParentBtn.className = "tb-btn";
+  pickParentBtn.textContent = "選択…";
+  parentRow.append(parentLbl, parentInput, pickParentBtn);
+  wrapper.appendChild(parentRow);
+
+  const folderNameRow = document.createElement("div");
+  folderNameRow.className = "modal-row";
+  folderNameRow.style.display = "none";
+  const folderNameLbl = document.createElement("label");
+  folderNameLbl.textContent = "フォルダ名";
+  const folderNameInput = document.createElement("input");
+  folderNameInput.type = "text";
+  folderNameInput.placeholder = "例: 令和06年（刑）第12345号 山田太郎";
+  folderNameRow.append(folderNameLbl, folderNameInput);
+  wrapper.appendChild(folderNameRow);
+
+  // D&D 保存先サブフォルダ（共通オプション）
+  const subdirRow = document.createElement("div");
+  subdirRow.className = "modal-row";
+  const subdirLbl = document.createElement("label");
+  subdirLbl.textContent = "D&D 保存先";
+  const subdirInput = document.createElement("input");
+  subdirInput.type = "text";
+  subdirInput.placeholder = "例: __Document__（省略時はフォルダ直下）";
+  subdirRow.append(subdirLbl, subdirInput);
+  wrapper.appendChild(subdirRow);
 
   const pickHint = document.createElement("div");
   pickHint.className = "modal-hint";
-  pickHint.textContent = "";
-  frag.appendChild(pickHint);
+  wrapper.appendChild(pickHint);
 
   // ☑ 即時索引
   const idxRow = document.createElement("div");
@@ -665,7 +760,7 @@ async function openAddCaseModal() {
   idxLbl.textContent = "追加後すぐ索引を作成（OCR・件数によっては数十分〜数時間かかります）";
   idxLbl.prepend(idxChk);
   idxRow.appendChild(idxLbl);
-  frag.appendChild(idxRow);
+  wrapper.appendChild(idxRow);
 
   // ☑ reindex 許可
   const reindexRow = document.createElement("div");
@@ -678,12 +773,12 @@ async function openAddCaseModal() {
   reindexLbl.textContent = "このMacで索引の作成・更新を許可する（通常は米谷のMacのみON。佐藤さんのMacではOFF）";
   reindexLbl.prepend(reindexChk);
   reindexRow.appendChild(reindexLbl);
-  frag.appendChild(reindexRow);
+  wrapper.appendChild(reindexRow);
 
   const errEl = document.createElement("div");
   errEl.className = "modal-error";
   errEl.style.display = "none";
-  frag.appendChild(errEl);
+  wrapper.appendChild(errEl);
 
   const actions = document.createElement("div");
   actions.className = "modal-actions";
@@ -694,47 +789,65 @@ async function openAddCaseModal() {
   addBtn.className = "primary";
   addBtn.textContent = "追加";
   actions.append(cancelBtn, addBtn);
-  frag.appendChild(actions);
+  wrapper.appendChild(actions);
 
-  // フォルダ選択ボタン
-  pickBtn.onclick = async () => {
-    pickBtn.disabled = true;
+  // モード切替
+  const switchMode = (m) => {
+    mode = m;
+    btnExisting.className = m === "existing" ? "active" : "";
+    btnNew.className = m === "new" ? "active" : "";
+    pathRow.style.display = m === "existing" ? "" : "none";
+    parentRow.style.display = m === "new" ? "" : "none";
+    folderNameRow.style.display = m === "new" ? "" : "none";
+    addBtn.textContent = m === "new" ? "作成して追加" : "追加";
+  };
+  btnExisting.onclick = () => switchMode("existing");
+  btnNew.onclick = () => switchMode("new");
+
+  // フォルダ選択ヘルパー
+  const pickFolder = async (targetInput, btn) => {
+    btn.disabled = true;
     pickHint.textContent = "Finderのダイアログを確認してください（他のウィンドウの背面に出ることがあります）";
     try {
-      const res = await fetch("/api/pick-folder", {
-        method: "POST", headers: { "X-Kiroku-Viewer": "1" },
-      });
-      if (res.status === 409) {
-        pickHint.textContent = "フォルダ選択ダイアログが既に開いています。";
-        return;
-      }
+      const res = await fetch("/api/pick-folder", { method: "POST", headers: { "X-Kiroku-Viewer": "1" } });
+      if (res.status === 409) { pickHint.textContent = "フォルダ選択ダイアログが既に開いています。"; return; }
       const data = await res.json();
-      if (data.cancelled) {
-        pickHint.textContent = "フォルダ選択がキャンセルされました。";
-      } else {
-        pathInput.value = data.path || "";
-        pickHint.textContent = "";
-      }
-    } catch (e) {
-      pickHint.textContent = "エラー: " + e;
-    } finally {
-      pickBtn.disabled = false;
-    }
+      if (data.cancelled) { pickHint.textContent = "フォルダ選択がキャンセルされました。"; }
+      else { targetInput.value = data.path || ""; pickHint.textContent = ""; }
+    } catch (e) { pickHint.textContent = "エラー: " + e; }
+    finally { btn.disabled = false; }
   };
+  pickBtn.onclick = () => pickFolder(pathInput, pickBtn);
+  pickParentBtn.onclick = () => pickFolder(parentInput, pickParentBtn);
 
   // 追加ボタン
   addBtn.onclick = async () => {
     errEl.style.display = "none";
     addBtn.disabled = true;
     try {
-      const res = await fetch("/api/cases", {
-        method: "POST",
-        headers: { "X-Kiroku-Viewer": "1", "Content-Type": "application/json" },
-        body: JSON.stringify({
+      let url, body;
+      if (mode === "existing") {
+        url = "/api/cases";
+        body = {
           name: nameInput.value.trim(),
           path: pathInput.value.trim(),
           reindex: reindexChk.checked,
-        }),
+          upload_subdir: subdirInput.value.trim(),
+        };
+      } else {
+        url = "/api/cases/folders";
+        body = {
+          parent_path: parentInput.value.trim(),
+          folder_name: folderNameInput.value.trim(),
+          name: nameInput.value.trim(),
+          reindex: reindexChk.checked,
+          upload_subdir: subdirInput.value.trim(),
+        };
+      }
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "X-Kiroku-Viewer": "1", "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -763,8 +876,6 @@ async function openAddCaseModal() {
     }
   };
 
-  const wrapper = document.createElement("div");
-  wrapper.appendChild(frag);
   openModal(wrapper);
   nameInput.focus();
 }
@@ -906,6 +1017,78 @@ async function openManageCasesModal() {
   openModal(renderManageModal());
 }
 
+// ---- D&D ハンドラ（④b） ----------------------------------------------
+function setupDragAndDrop() {
+  const wrap = document.getElementById("docs-table-wrap");
+  if (!wrap) return;
+
+  // ドロップゾーン要素を生成
+  const overlay = document.createElement("div");
+  overlay.className = "dnd-overlay";
+  const label = document.createElement("div");
+  label.className = "dnd-overlay-label";
+  label.textContent = "ここにファイルをドロップして追加";
+  overlay.appendChild(label);
+  wrap.appendChild(overlay);
+
+  let dragCounter = 0;
+
+  wrap.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    dragCounter++;
+    wrap.classList.add("dnd-active");
+  });
+  wrap.addEventListener("dragleave", () => {
+    dragCounter--;
+    if (dragCounter <= 0) { dragCounter = 0; wrap.classList.remove("dnd-active"); }
+  });
+  wrap.addEventListener("dragover", (e) => { e.preventDefault(); });
+  wrap.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    wrap.classList.remove("dnd-active");
+    if (!state.caseId) return;
+
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) return;
+
+    // 事件名を取得して確認ダイアログ
+    const caseName = document.getElementById("case-picker")?.selectedOptions[0]?.textContent || state.caseId;
+    const fileList = files.map((f) => `  • ${f.name}`).join("\n");
+    const ok = confirm(
+      `事件名：${caseName} に以下を追加します。\n\n${fileList}\n\n` +
+      "取り消す場合は Finder で削除→再索引してください。\n" +
+      "（Drive 同期はバックグラウンドで行われます）"
+    );
+    if (!ok) return;
+
+    const results = [];
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const res = await fetch(
+          `/api/cases/${encodeURIComponent(state.caseId)}/upload`,
+          { method: "POST", headers: { "X-Kiroku-Viewer": "1" }, body: fd }
+        );
+        const data = await res.json();
+        if (!res.ok) {
+          results.push(`✗ ${file.name}: ${data.detail || res.status}`);
+        } else {
+          results.push(`✓ ${file.name}`);
+        }
+      } catch (e) {
+        results.push(`✗ ${file.name}: ${e}`);
+      }
+    }
+
+    // 結果通知
+    alert(results.join("\n"));
+    // 一覧を更新（未索引バッジ付きで即表示）
+    await loadDocuments();
+  });
+}
+
 // ---- タブ・コントロール ------------------------------------------------
 function setupMainTabs() {
   document.querySelectorAll(".main-tab").forEach((btn) => {
@@ -938,6 +1121,7 @@ function setupControls() {
 async function boot() {
   setupMainTabs();
   setupControls();
+  setupDragAndDrop();
 
   // ＋追加・⚙管理 ボタン
   document.getElementById("add-case-btn").onclick = () => openAddCaseModal();
@@ -978,16 +1162,36 @@ async function boot() {
 export const appState = state;
 export { loadDocuments };
 window.__appState = state;
-window.__openDoc = (sha, page) => {
-  const d = state.documents.find((x) => x.sha256 === sha);
-  if (!d) return;
+window.__openDoc = async (sha, page, query) => {
+  // sha が一覧になければ loadDocuments() で1回リフレッシュ
+  let d = state.documents.find((x) => x.sha256 === sha);
+  if (!d) {
+    await loadDocuments();
+    d = state.documents.find((x) => x.sha256 === sha);
+  }
+  if (!d) {
+    alert("文書一覧に見つかりません。再索引・改名の可能性があります（sha: " + sha.slice(0, 12) + "…）");
+    return;
+  }
+  // 絞り込み・注釈専用フィルタをリセットして対象行が確実に描画されるよう同期
+  state.filter = "";
+  state.annoOnly = false;
+  const fi = document.getElementById("filter-input");
+  if (fi) fi.value = "";
+  const ao = document.getElementById("anno-only");
+  if (ao) ao.checked = false;
+
   document.querySelector('.main-tab[data-tab="docs"]').click();
   if (!state.openShas.includes(sha)) state.openShas.push(sha);
   if (page) state.openPages[sha] = page;
+  if (query) state.openQueries[sha] = query;
   state.evidenceTab = "all";
   renderTabs();
   renderEvidenceTabs();
   renderTable();
+  // renderTable 後にスクロール
+  const el = document.querySelector(`tr.doc-row[data-sha="${sha}"]`);
+  if (el) el.scrollIntoView({ block: "start" });
 };
 
 // ---- テキスト検索タブ -------------------------------------------------
@@ -1069,7 +1273,7 @@ async function runSearch() {
         `<div class="rc-head"><strong>${escapeHtml(h.evidence_no || "—")}</strong> ` +
         `${escapeHtml(h.title)} <span class="rc-page">p.${h.page_no}</span></div>` +
         `<div class="rc-snippet">${highlightSnippet(h.snippet, q)}</div>`;
-      card.onclick = () => window.__openDoc(h.sha256, h.page_no);
+      card.onclick = () => window.__openDoc(h.sha256, h.page_no, q);
       results.appendChild(card);
     }
   } catch (e) {

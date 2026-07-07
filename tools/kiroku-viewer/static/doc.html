@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>記録ビューア — 別タブ</title>
+  <link rel="stylesheet" href="/static/vendor/pdfjs/textlayer.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    body { display: flex; flex-direction: column; height: 100vh; margin: 0; }
+    #doc-topbar {
+      display: flex; align-items: center; gap: 12px; padding: 6px 14px;
+      border-bottom: 1px solid var(--border); background: var(--header-bg);
+      flex: 0 0 auto; font-size: 13px;
+    }
+    #doc-topbar h1 { font-size: 14px; margin: 0; }
+    #doc-container { flex: 1 1 auto; overflow: hidden; display: flex; }
+    #doc-container .inline-viewer { flex: 1; min-width: 0; }
+    #doc-container .viewer-layout { height: calc(100vh - 40px); }
+    .readonly-badge {
+      background: #fef3c7; color: #92400e; border-radius: 4px;
+      padding: 2px 8px; font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <header id="doc-topbar">
+    <h1>📄 記録ビューア</h1>
+    <span id="doc-title" style="color:var(--muted)"></span>
+    <span class="readonly-badge">注釈：閲覧専用（別タブ）</span>
+  </header>
+  <main id="doc-container"></main>
+  <script type="module">
+    import { mountInlineViewer } from "/static/viewer.js";
+
+    const params = new URLSearchParams(location.search);
+    const caseId = params.get("case") || "";
+    const sha = params.get("sha") || "";
+    const page = parseInt(params.get("page") || "1", 10) || 1;
+
+    async function boot() {
+      const container = document.getElementById("doc-container");
+      if (!caseId || !sha) {
+        container.innerHTML = '<p class="placeholder">パラメータが不足しています（case / sha）。</p>';
+        return;
+      }
+
+      let docs = [];
+      let doc = null;
+      try {
+        const res = await fetch(`/api/cases/${encodeURIComponent(caseId)}/documents`);
+        const data = await res.json();
+        docs = data.documents || [];
+        doc = docs.find((d) => d.sha256 === sha);
+      } catch (e) {
+        container.innerHTML = `<p class="placeholder">文書一覧の取得に失敗しました: ${e}</p>`;
+        return;
+      }
+      if (!doc) {
+        container.innerHTML = '<p class="placeholder">文書が見つかりません（再索引・改名の可能性）。</p>';
+        return;
+      }
+
+      document.title = `${doc.evidence_no || "—"} ${doc.title} — 記録ビューア`;
+      document.getElementById("doc-title").textContent = `${doc.evidence_no || "—"} ${doc.title}`;
+
+      mountInlineViewer(doc, container, {
+        caseId,
+        documents: docs,
+        initialPage: page,
+        readOnly: true,  // 注釈閲覧専用（編集不可）
+        onClose: () => window.close(),
+        onNavigate: (nextSha) => {
+          const url = new URL(location.href);
+          url.searchParams.set("sha", nextSha);
+          url.searchParams.set("page", "1");
+          location.href = url.toString();
+        },
+      });
+    }
+
+    boot();
+  </script>
+  <div id="modal-root"></div>
+</body>
+</html>

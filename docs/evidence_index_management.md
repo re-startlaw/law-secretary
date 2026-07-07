@@ -33,6 +33,19 @@ OCRも試す場合:
 venv/bin/python scripts/evidence_index.py build --ocr
 ```
 
+`--ocr` は Apple Vision OCR を優先し、失敗時に Tesseract へフォールバックする。
+PDF内の既存OCRテキストが低品質な場合は、時間はかかるが全ページを画像から読み直す。
+
+```bash
+venv/bin/python scripts/evidence_index.py build --ocr --force-ocr
+```
+
+Tesseractだけで比較したい場合:
+
+```bash
+venv/bin/python scripts/evidence_index.py build --ocr --ocr-engine tesseract
+```
+
 検索:
 
 ```bash
@@ -59,4 +72,3 @@ venv/bin/python scripts/evidence_index.py log-llm \
 - `timeline.*` の `review_status` が `原PDF目視確認済み` でない行は未確認候補。
 - 外部AI投入前には、対象ファイル、個人情報、利用目的、投入先、削除予定を明示して確認を取る。
 - 検察官開示証拠、弁護人メモ、接見メモ、反対尋問メモ、公開資料は索引・保存場所を分ける。
-

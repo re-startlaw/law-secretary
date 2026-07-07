@@ -70,6 +70,12 @@ EVIDENCE_FILE_RE = re.compile(
     r"\s*(?P<rest>.*)$"
 )
 
+# 弁護革命が付加する末尾ID（英字・数字混在必須・10〜16桁）を除去するパターン。
+# 先頭ドット（拡張子区切り）を含む形で末尾にマッチ。
+BENGOKAKUMEI_ID_RE = re.compile(
+    r"\.(?=[a-z0-9]*[0-9])(?=[a-z0-9]*[a-z])[a-z0-9]{10,16}(?=$|[@＠])"
+)
+
 
 EVIDENCE_KIND_ORDER = {"甲": 0, "乙": 1, "弁": 2}
 _FW_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
@@ -184,21 +190,32 @@ def parse_name_only(stem: str) -> tuple[str, str, str, str]:
 
     ファイルをハッシュ・stat しないので PDF・メディア双方に使える。
     返り値: (evidence_no, title, document_date, person_or_source)
-    """
-    evidence_no = ""
-    title_part = stem
 
-    m = EVIDENCE_FILE_RE.match(stem)
+    処理順: 弁護革命ID除去 → 符号 → @分離（全角・半角の最後の出現） → 日付抽出
+    """
+    # Step 1: 弁護革命末尾IDを除去（英字・数字混在必須・10〜16桁）
+    cleaned = BENGOKAKUMEI_ID_RE.sub("", stem)
+    if not cleaned:
+        cleaned = stem  # 除去後に空になる場合は元に戻す
+
+    evidence_no = ""
+    title_part = cleaned
+
+    m = EVIDENCE_FILE_RE.match(cleaned)
     if m:
         evidence_no = m.group("evidence_no")
         title_part = m.group("rest").strip()
 
+    # Step 2: @分離（全角＠と半角@の両方、最後の出現で rsplit）
     person_or_source = ""
-    if "＠" in title_part:
-        title_part, person_or_source = title_part.rsplit("＠", 1)
-        title_part = title_part.strip()
-        person_or_source = person_or_source.strip()
+    last_full = title_part.rfind("＠")  # ＠ = U+FF20
+    last_half = title_part.rfind("@")
+    last_at = max(last_full, last_half)
+    if last_at >= 0:
+        person_or_source = title_part[last_at + 1 :].strip()
+        title_part = title_part[:last_at].strip()
 
+    # Step 3: 日付抽出（ID除去後に行うことで誤日付汚染を防ぐ）
     document_date = ""
     date_hits = list(DATE_RE.finditer(title_part))
     if date_hits:
@@ -206,7 +223,7 @@ def parse_name_only(stem: str) -> tuple[str, str, str, str]:
         document_date = normalize_date_match(last)
         title_part = (title_part[: last.start()] + title_part[last.end() :]).strip()
 
-    title = re.sub(r"\s+", " ", title_part).strip() or stem
+    title = re.sub(r"\s+", " ", title_part).strip().rstrip(".").strip() or stem
     return evidence_no, title, document_date, person_or_source
 
 
@@ -230,13 +247,25 @@ def parse_pdf_name(path: Path, evidence_dir: Path) -> PdfMetadata:
     )
 
 
+# PDFs excluded from indexing even when found by rglob.
+# - 分冊マスターPDF: navigation bundles that duplicate all individual files
+# - 重複？…: explicitly marked duplicate bundle
+_EXCLUDED_PDF_NAMES: frozenset[str] = frozenset(
+    [
+        "第４分冊.pdf",
+        "第５分冊.pdf",
+        "重複？（１２３〜）.pdf",
+    ]
+)
+
+
 def iter_pdfs(evidence_dir: Path) -> Iterable[Path]:
     for path in sorted(evidence_dir.rglob("*.pdf")):
-        try:
-            path.relative_to(evidence_dir / INDEX_DIR_NAME)
+        # Exclude _index directories at any depth in the path
+        if INDEX_DIR_NAME in path.parts:
             continue
-        except ValueError:
-            pass
+        if path.name in _EXCLUDED_PDF_NAMES:
+            continue
         if path.is_file():
             yield path
 

@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Request, Response
+from fastapi import Body, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -101,6 +101,7 @@ def load_config() -> dict:
             "name": c.get("name", cid),
             "path": Path(c["path"]).expanduser().resolve(),
             "reindex": bool(c.get("reindex", False)),
+            "upload_subdir": c.get("upload_subdir", ""),
         }
     return {"cases": cases, "display_names": names}
 
@@ -111,8 +112,13 @@ def save_cases_config() -> None:
     """
     data = {
         "cases": [
-            {"id": c["id"], "name": c["name"], "path": str(c["path"]),
-             "reindex": c["reindex"]}
+            {
+                "id": c["id"],
+                "name": c["name"],
+                "path": str(c["path"]),
+                "reindex": c["reindex"],
+                **({"upload_subdir": c["upload_subdir"]} if c.get("upload_subdir") else {}),
+            }
             for c in CONFIG["cases"].values()
         ],
         "display_names": CONFIG["display_names"],
@@ -364,13 +370,29 @@ def iter_case_files(case: dict):
                 yield root_path / name
 
 
+def _sanitize_indexed_doc_fields(doc: dict) -> dict:
+    """索引DB由来の文書について、弁護革命IDが含まれるファイル名を再パースして
+    title / document_date / author を上書きする（再索引不要・D3整合）。"""
+    file_name = doc.get("file_name", "")
+    stem = Path(file_name).stem
+    if ei.BENGOKAKUMEI_ID_RE.search(stem):
+        ev, title, doc_date, author = ei.parse_name_only(stem)
+        doc["title"] = title
+        doc["document_date"] = doc_date
+        doc["author"] = author
+        # 符号は索引DBの値を優先（上書きしない）
+    return doc
+
+
 def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
     """索引DB由来＋未索引フォルダ走査をマージした文書一覧を返す。
+
+    重複排除: 索引行のファイルが実在しない場合のみ、同 sha の walk 行を採用する。
+    両ファイルが正規に実在する場合は両行を残す。
 
     返り値: (documents, sha256→絶対パス の解決マップ)
     """
     base = case["path"]
-    docs: list[dict] = []
     sha_to_path: dict[str, Path] = {}
     indexed_rel: set[str] = set()
     meta = read_merged_meta(case)
@@ -386,6 +408,12 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
         doc["rotation"] = m.get("rotation", 0)
         doc["has_annotations"] = doc["sha256"] in anno
         return doc
+
+    # sha256 → indexed doc (file が存在しない行)
+    indexed_sha_missing: dict[str, dict] = {}
+    # sha256 → indexed doc (file が存在する行)
+    indexed_sha_existing: set[str] = set()
+    indexed_docs: list[dict] = []
 
     db_path = cached_db_path(case)
     if db_path is not None:
@@ -417,7 +445,7 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
                 (min_conf is not None and min_conf < OCR_LOW_CONFIDENCE)
                 or r["extract_status"] == ei.STATUS_NEEDS_REVIEW
             )
-            docs.append(apply_meta(
+            doc = _sanitize_indexed_doc_fields(apply_meta(
                 {
                     "sha256": r["sha256"],
                     "evidence_no": r["evidence_no"],
@@ -433,8 +461,16 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
                     "ocr_pages": r["ocr_pages"],
                 }
             ))
+            if target.exists():
+                indexed_sha_existing.add(r["sha256"])
+            else:
+                indexed_sha_missing[r["sha256"]] = doc
+            indexed_docs.append(doc)
 
     # 未索引ファイル（PDF・メディア）をマージ（D5）。
+    # 同 sha で索引行ファイルが欠落している行は walk 行で置換する。
+    replaced_by_walk: set[str] = set()
+    walk_docs: list[dict] = []
     for fpath in iter_case_files(case):
         rel = fpath.relative_to(base).as_posix()
         if rel in indexed_rel:
@@ -444,7 +480,7 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
         ext = fpath.suffix.lower()
         kind = "pdf" if ext == ".pdf" else "media"
         evidence_no, title, doc_date, author = ei.parse_name_only(fpath.stem)
-        docs.append(apply_meta(
+        walk_doc = apply_meta(
             {
                 "sha256": sha,
                 "evidence_no": evidence_no,
@@ -459,8 +495,15 @@ def build_listing(case: dict) -> tuple[list[dict], dict[str, Path]]:
                 "ocr_low_confidence": False,
                 "ocr_pages": 0,
             }
-        ))
+        )
+        if sha in indexed_sha_missing:
+            # ファイル欠落の索引行を walk 行で置換
+            replaced_by_walk.add(sha)
+        walk_docs.append(walk_doc)
 
+    # 索引行から「walk 行に置換された欠落行」を除外してマージ
+    docs: list[dict] = [d for d in indexed_docs if d["sha256"] not in replaced_by_walk]
+    docs.extend(walk_docs)
     docs.sort(key=lambda d: ei.evidence_sort_key(d["evidence_no"]))
     return docs, sha_to_path
 
@@ -600,6 +643,37 @@ def api_cases():
     }
 
 
+def _register_case(target: Path, name: str, reindex: bool, upload_subdir: str = "") -> dict:
+    """target フォルダを事件として登録する共通ロジック（_config_lock 取得後に呼ぶこと）。"""
+    for c in CONFIG["cases"].values():
+        if c["path"] == target:
+            raise HTTPException(
+                status_code=409,
+                detail=f"同じフォルダが事件「{c['name']}」として登録済みです",
+            )
+    cid = gen_case_id(target)
+    base_id = cid
+    suffix = 0
+    while cid in CONFIG["cases"]:
+        suffix += 1
+        cid = f"{base_id}{suffix}"
+    CONFIG["cases"][cid] = {
+        "id": cid,
+        "name": name,
+        "path": target,
+        "reindex": reindex,
+        "upload_subdir": upload_subdir,
+    }
+    save_cases_config()
+    return {
+        "id": cid,
+        "name": name,
+        "reindex": reindex,
+        "upload_subdir": upload_subdir,
+        "has_index": (target / EXPORT_REL).exists(),
+    }
+
+
 @app.post("/api/cases")
 def api_add_case(payload: dict = Body(...)):
     """事件フォルダを登録する。"""
@@ -609,36 +683,77 @@ def api_add_case(payload: dict = Body(...)):
     target = Path(raw_path).expanduser().resolve()
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"フォルダが見つかりません: {raw_path}")
+    name = (payload.get("name") or "").strip() or _default_case_name(target)
+    reindex = bool(payload.get("reindex", False))
+    upload_subdir = (payload.get("upload_subdir") or "").strip()
     with _config_lock:
-        # 重複チェック（両辺 resolve 済み）。
+        return _register_case(target, name, reindex, upload_subdir)
+
+
+_FOLDER_NAME_RE = re.compile(r'[/\\:\x00]')
+_FOLDER_NAME_DOTDOT = re.compile(r'(?:^|[/\\])\.\.(?:[/\\]|$)')
+
+
+@app.post("/api/cases/folders")
+def api_create_case_folder(payload: dict = Body(...)):
+    """新規フォルダを作成して事件として登録する。
+
+    parent_path: 親フォルダの絶対パス
+    folder_name: 作成するフォルダ名
+    name: 事件名（省略時はフォルダ名から自動設定）
+    reindex: 索引作成を許可するか
+    upload_subdir: D&D 保存先サブフォルダ（省略時は事件フォルダ直下）
+    """
+    raw_parent = payload.get("parent_path", "").strip()
+    folder_name = (payload.get("folder_name") or "").strip()
+
+    if not raw_parent:
+        raise HTTPException(status_code=400, detail="parent_path は必須です")
+    if not folder_name:
+        raise HTTPException(status_code=400, detail="folder_name は必須です")
+
+    # folder_name バリデーション
+    if _FOLDER_NAME_RE.search(folder_name):
+        raise HTTPException(status_code=400, detail="フォルダ名にパス区切り文字または NUL は使えません")
+    if folder_name.startswith("."):
+        raise HTTPException(status_code=400, detail="フォルダ名は先頭ドット不可です")
+    if folder_name.startswith("_"):
+        raise HTTPException(status_code=400, detail="フォルダ名は先頭アンダースコア不可です（_index 衝突防止）")
+    if ".." in folder_name:
+        raise HTTPException(status_code=400, detail="フォルダ名に .. は使えません")
+
+    parent = Path(raw_parent).expanduser().resolve()
+    if not parent.is_dir():
+        raise HTTPException(status_code=400, detail=f"親フォルダが見つかりません: {raw_parent}")
+
+    target = parent / folder_name
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"同名フォルダが既に存在します: {folder_name}")
+
+    # 入れ子チェック: parent が既登録事件フォルダの配下（または一致）でないこと
+    with _config_lock:
         for c in CONFIG["cases"].values():
-            if c["path"] == target:
+            case_path = c["path"].resolve()
+            try:
+                parent.relative_to(case_path)
                 raise HTTPException(
                     status_code=409,
-                    detail=f"同じフォルダが事件「{c['name']}」として登録済みです",
+                    detail=f"親フォルダが既登録事件「{c['name']}」の配下です（入れ子登録禁止）",
                 )
-        name = (payload.get("name") or "").strip() or _default_case_name(target)
+            except ValueError:
+                pass
+            # parent が case_path 自身でもエラー（同上）
+            if parent == case_path:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"親フォルダが既登録事件「{c['name']}」です（入れ子登録禁止）",
+                )
+
+        target.mkdir(parents=False)
+        name = (payload.get("name") or "").strip() or folder_name
         reindex = bool(payload.get("reindex", False))
-        cid = gen_case_id(target)
-        # ID 衝突時に末尾を伸ばす（実用上ほぼ不要）。
-        base_id = cid
-        suffix = 0
-        while cid in CONFIG["cases"]:
-            suffix += 1
-            cid = f"{base_id}{suffix}"
-        CONFIG["cases"][cid] = {
-            "id": cid,
-            "name": name,
-            "path": target,
-            "reindex": reindex,
-        }
-        save_cases_config()
-    return {
-        "id": cid,
-        "name": name,
-        "reindex": reindex,
-        "has_index": (target / EXPORT_REL).exists(),
-    }
+        upload_subdir = (payload.get("upload_subdir") or "").strip()
+        return _register_case(target, name, reindex, upload_subdir)
 
 
 @app.delete("/api/cases/{case_id}")
@@ -718,6 +833,19 @@ def api_pdf(case_id: str, sha256: str, request: Request):
     return range_response(path, request, ctype)
 
 
+def _sanitize_search_hit(hit: dict) -> dict:
+    """検索ヒットの title を弁護革命ID除去後の表示値に正規化する。"""
+    # search_pages は file_name を返さないため、title から直接サニタイズは難しい。
+    # ここでは title 文字列自体に BENGOKAKUMEI_ID_RE パターンが残っている場合を処理する。
+    # （build_listing 側でサニタイズ済みの DB があれば不要だが保険として適用）
+    title = hit.get("title", "")
+    sanitized = ei.BENGOKAKUMEI_ID_RE.sub("", title)
+    if sanitized and sanitized != title:
+        hit = dict(hit)
+        hit["title"] = sanitized.strip()
+    return hit
+
+
 @app.get("/api/cases/{case_id}/search")
 def api_search(case_id: str, q: str = "", filter: str = "", limit: int = 100):
     """本文検索（D1）。snippet 付きでページ単位ヒットを返す。
@@ -734,6 +862,7 @@ def api_search(case_id: str, q: str = "", filter: str = "", limit: int = 100):
         hits = ei.search_pages(conn, q, raw_limit)
     finally:
         conn.close()
+    hits = [_sanitize_search_hit(h) for h in hits]
     if filter.strip():
         nf = ei.normalize_for_search(filter)
         hits = [
@@ -1098,6 +1227,142 @@ def api_relink(case_id: str, sha256: str, payload: dict = Body(...)):
     src.unlink()
     _listing_cache.pop(case_id, None)
     return {"ok": True, "moved": len(src_data.get("annotations", [])), "target": target}
+
+
+# --------------------------------------------------------------------------
+# ファイルアップロード（D&D / ④b）
+# --------------------------------------------------------------------------
+
+UPLOAD_MAX_BYTES = 500 * 1024 * 1024  # 500 MB
+IMPORT_LOG_NAME = "import_log.json"
+_UNSAFE_FILENAME_RE = re.compile(r'[/\\:\x00]|^\.')
+
+
+def _upload_dir(case: dict) -> Path:
+    """D&D の保存先ディレクトリを返す。upload_subdir が設定されていればその配下。"""
+    subdir = case.get("upload_subdir", "").strip()
+    if subdir:
+        return (case["path"] / subdir).resolve()
+    return case["path"].resolve()
+
+
+def _append_import_log(case: dict, entry: dict) -> None:
+    """_index/import_log.json にアトミック追記する。"""
+    log_path = case["path"] / INDEX_DIR_NAME / IMPORT_LOG_NAME
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    existing: list[dict] = []
+    if log_path.exists():
+        try:
+            existing = json.loads(log_path.read_text(encoding="utf-8"))
+            if not isinstance(existing, list):
+                existing = []
+        except (OSError, json.JSONDecodeError):
+            existing = []
+    existing.append(entry)
+    atomic_write_json(log_path, existing)
+
+
+@app.post("/api/cases/{case_id}/upload")
+async def api_upload(case_id: str, file: UploadFile = File(...)):
+    """事件フォルダへファイルをアップロードする（D&D ドロップ先）。
+
+    - 拡張子ホワイトリスト: OPENABLE_EXTS
+    - sha256 重複は拒否
+    - 同名・別内容は 409
+    - インポートログを _index/import_log.json に追記
+    """
+    case = get_case(CONFIG, case_id)
+
+    # ファイル名サニタイズ
+    orig_name = file.filename or ""
+    safe_name = Path(orig_name).name  # basename のみ
+    if not safe_name or _UNSAFE_FILENAME_RE.search(safe_name) or ".." in safe_name:
+        raise HTTPException(status_code=400, detail="ファイル名が不正です")
+
+    ext = Path(safe_name).suffix.lower()
+    if ext not in OPENABLE_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"許可されていない拡張子です: {ext}（許可: {', '.join(sorted(OPENABLE_EXTS))}）",
+        )
+
+    # 保存先ディレクトリの検証
+    dest_dir = _upload_dir(case)
+    if not dest_dir.exists():
+        raise HTTPException(status_code=400, detail=f"保存先フォルダが見つかりません: {dest_dir}")
+
+    dest = (dest_dir / safe_name).resolve()
+    base = case["path"].resolve()
+    index_dir = (base / INDEX_DIR_NAME).resolve()
+
+    # パストラバーサル検証
+    if base not in dest.parents and dest != base:
+        raise HTTPException(status_code=403, detail="保存先が事件フォルダ外です")
+    # _index 配下への書き込み禁止
+    try:
+        dest.relative_to(index_dir)
+        raise HTTPException(status_code=403, detail="_index フォルダへの書き込みは禁止です")
+    except ValueError:
+        pass
+
+    # データ読み込み（サイズ上限）
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(256 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > UPLOAD_MAX_BYTES:
+            raise HTTPException(status_code=413, detail=f"ファイルサイズが上限（500MB）を超えています")
+        chunks.append(chunk)
+    data = b"".join(chunks)
+
+    incoming_sha = hashlib.sha256(data).hexdigest()
+
+    # sha256 重複チェック（既存文書と同一内容）
+    docs, _ = get_listing(case)
+    for d in docs:
+        if d["sha256"] == incoming_sha:
+            raise HTTPException(
+                status_code=409,
+                detail=f"既に登録済みです（同一内容: {d.get('file_name', d['sha256'][:12])}）",
+            )
+
+    # 同名・別内容チェック
+    if dest.exists():
+        existing_sha = ei.sha256_file(dest)
+        if existing_sha != incoming_sha:
+            raise HTTPException(
+                status_code=409,
+                detail="同名の別内容ファイルがあります（差し替え証拠の可能性）。別名で保存するか中止してください。",
+            )
+        # 同名・同内容はここには来ない（sha重複で弾かれている）
+
+    # .tmp → os.replace（D9）
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
+
+    # インポートログ追記
+    _append_import_log(case, {
+        "time": now_iso(),
+        "user": current_user(),
+        "file_name": safe_name,
+        "sha256": incoming_sha,
+        "size": total,
+    })
+
+    # キャッシュ無効化（TTL 5 秒の間に一覧に出ず再ドロップ→事故を防ぐ）
+    _listing_cache.pop(case_id, None)
+
+    return {
+        "ok": True,
+        "file_name": safe_name,
+        "sha256": incoming_sha,
+        "size": total,
+        "note": "Drive 同期はバックグラウンドで行われます。",
+    }
 
 
 # 静的配信（SPA）。最後にマウントして API ルートを優先する。

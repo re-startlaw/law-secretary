@@ -26,6 +26,8 @@ scripts/*
 !scripts/list_path_from_file.py
 !scripts/backup_to_drive.sh
 !scripts/extract_text.py
+!scripts/evidence_index.py
+!scripts/evidence_vision_ocr.swift
 
 # 同期用の一時・ログ
 .sync/

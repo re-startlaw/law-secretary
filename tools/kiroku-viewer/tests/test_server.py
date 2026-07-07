@@ -540,3 +540,283 @@ def test_reindex_log_empty(mgmt_client):
     r = client.get("/api/cases/existing/reindex/log")
     assert r.status_code == 200
     assert r.json()["log"] == ""
+
+
+# ---- 課題③: build_listing 重複排除 ------------------------------------
+
+@pytest.fixture
+def dedup_client(tmp_path: Path):
+    """索引行ファイル欠落・両ファイル実在の2パターンを検証するフィクスチャ。"""
+    case_dir = tmp_path / "dedup_case"
+    (case_dir / "_index" / "export").mkdir(parents=True)
+
+    sha_present = "a" * 64   # 実在ファイルに対応する sha
+    sha_missing = "b" * 64   # 索引行ファイルが存在しない sha
+    sha_renamed = "c" * 64   # sha_missing と同一内容の walk ファイル
+
+    # 実在PDF（索引あり）
+    present_pdf = case_dir / "甲1 被害届.pdf"
+    present_pdf.write_bytes(b"%PDF-1.4\n" + b"x" * 512)
+    # 索引行の rel_path は存在しないファイル
+    build_db(
+        case_dir / "_index" / "export" / "evidence_index.sqlite",
+        [
+            {
+                "evidence_no": "甲1",
+                "title": "被害届",
+                "rel_path": "甲1 被害届.pdf",
+                "sha256": sha_present,
+                "pages": ["本文"],
+            },
+            {
+                "evidence_no": "乙1",
+                "title": "旧ファイル（欠落）",
+                "rel_path": "乙1 旧ファイル.pdf",  # このファイルは存在しない
+                "sha256": sha_missing,
+                "pages": ["内容"],
+            },
+        ],
+    )
+    # sha_missing と同じ sha を持つ walk ファイル（改名されたと想定）
+    renamed_pdf = case_dir / "乙1 新ファイル.pdf"
+    # sha_missing の sha は "b"*64 なので、実際にはこのファイルの sha は一致しない。
+    # テストでは monkeypatch で sha256_file を差し替えて sha を制御する。
+    renamed_pdf.write_bytes(b"%PDF-1.4\n" + b"y" * 512)
+
+    # 両ファイル実在パターン: sha_present を持つファイルが別パスにも存在
+    copy_pdf = case_dir / "甲1コピー.pdf"
+    copy_pdf.write_bytes(b"%PDF-1.4\n" + b"x" * 512)  # 内容は same as sha_present
+
+    server.CONFIG = {
+        "cases": {
+            "dd": {"id": "dd", "name": "重複テスト事件", "path": case_dir, "reindex": False,
+                   "upload_subdir": ""}
+        },
+        "display_names": {},
+    }
+    server._listing_cache.clear()
+    client = TestClient(server.app, base_url="http://127.0.0.1:8788")
+    return client, case_dir, sha_present, sha_missing, sha_renamed
+
+
+def test_build_listing_dedup_missing_replaced(dedup_client, monkeypatch):
+    """索引行ファイルが欠落 + 同 sha の walk 行 → 1行になること。"""
+    client, case_dir, sha_present, sha_missing, sha_renamed = dedup_client
+    import evidence_index as _ei
+
+    # sha256_file を差し替えて「乙1 新ファイル.pdf」が sha_missing を返すように
+    orig_sha256_file = _ei.sha256_file
+    def fake_sha256_file(path):
+        if "新ファイル" in str(path) or "コピー" in str(path):
+            if "新ファイル" in str(path):
+                return sha_missing
+            return sha_present  # コピーは元と同じ sha
+        return orig_sha256_file(path)
+    monkeypatch.setattr(_ei, "sha256_file", fake_sha256_file)
+
+    server._listing_cache.clear()
+    docs = client.get("/api/cases/dd/documents").json()["documents"]
+    # sha_missing は walk 行で置換 → 合計件数は 2 (甲1 + 乙1walk) + 1(コピー) = 3
+    # ただし乙1の旧索引行は除外されること
+    sha_list = [d["sha256"] for d in docs]
+    assert sha_list.count(sha_missing) == 1, "欠落sha は1行のみであること（walk 行に置換）"
+    # 旧 rel_path「乙1 旧ファイル.pdf」ではなく「乙1 新ファイル.pdf」が採用されていること
+    dedup_docs = [d for d in docs if d["sha256"] == sha_missing]
+    assert dedup_docs[0]["file_name"] == "乙1 新ファイル.pdf"
+
+
+def test_build_listing_both_files_keep_two_rows(dedup_client, monkeypatch):
+    """両ファイルが実在 → sha が重複しても2行残ること。"""
+    client, case_dir, sha_present, sha_missing, sha_renamed = dedup_client
+    import evidence_index as _ei
+
+    orig_sha256_file = _ei.sha256_file
+    def fake_sha256_file(path):
+        if "コピー" in str(path):
+            return sha_present  # コピーは元と同じ sha
+        if "新ファイル" in str(path):
+            return sha_missing
+        return orig_sha256_file(path)
+    monkeypatch.setattr(_ei, "sha256_file", fake_sha256_file)
+
+    server._listing_cache.clear()
+    docs = client.get("/api/cases/dd/documents").json()["documents"]
+    # sha_present は索引行 + walk のコピー行の2行になること
+    sha_present_rows = [d for d in docs if d["sha256"] == sha_present]
+    assert len(sha_present_rows) == 2, f"両ファイル実在時は2行: {len(sha_present_rows)}"
+
+
+# ---- 課題⑤: 事件フォルダ新規作成 API ----------------------------------
+
+def test_create_case_folder_ok(mgmt_client):
+    client, tdir = mgmt_client
+    parent = tdir / "new_parent"
+    parent.mkdir()
+    r = client.post("/api/cases/folders", headers=CSRF, json={
+        "parent_path": str(parent),
+        "folder_name": "新事件フォルダ",
+        "name": "テスト新事件",
+        "reindex": False,
+    })
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "テスト新事件"
+    assert (parent / "新事件フォルダ").is_dir()
+
+
+def test_create_case_folder_underscore_rejected(mgmt_client):
+    client, tdir = mgmt_client
+    parent = tdir / "p2"; parent.mkdir()
+    r = client.post("/api/cases/folders", headers=CSRF, json={
+        "parent_path": str(parent), "folder_name": "_不正フォルダ",
+    })
+    assert r.status_code == 400
+
+
+def test_create_case_folder_dotdot_rejected(mgmt_client):
+    client, tdir = mgmt_client
+    parent = tdir / "p3"; parent.mkdir()
+    r = client.post("/api/cases/folders", headers=CSRF, json={
+        "parent_path": str(parent), "folder_name": "../escape",
+    })
+    assert r.status_code == 400
+
+
+def test_create_case_folder_separator_rejected(mgmt_client):
+    client, tdir = mgmt_client
+    parent = tdir / "p4"; parent.mkdir()
+    r = client.post("/api/cases/folders", headers=CSRF, json={
+        "parent_path": str(parent), "folder_name": "a/b",
+    })
+    assert r.status_code == 400
+
+
+def test_create_case_folder_existing_name_rejected(mgmt_client):
+    client, tdir = mgmt_client
+    parent = tdir / "p5"; parent.mkdir()
+    (parent / "already_exists").mkdir()
+    r = client.post("/api/cases/folders", headers=CSRF, json={
+        "parent_path": str(parent), "folder_name": "already_exists",
+    })
+    assert r.status_code == 409
+
+
+def test_create_case_folder_nested_rejected(mgmt_client):
+    """既登録事件フォルダの配下への入れ子登録は拒否されること。"""
+    client, tdir = mgmt_client
+    # existing_case が登録済み。その子フォルダを親にしようとする。
+    existing_path = tdir / "existing_case"
+    sub = existing_path / "subfolder"
+    sub.mkdir(exist_ok=True)
+    r = client.post("/api/cases/folders", headers=CSRF, json={
+        "parent_path": str(sub),
+        "folder_name": "nested_case",
+    })
+    assert r.status_code == 409
+
+
+def test_create_case_folder_requires_csrf(mgmt_client):
+    client, tdir = mgmt_client
+    parent = tdir / "p6"; parent.mkdir()
+    r = client.post("/api/cases/folders", json={
+        "parent_path": str(parent), "folder_name": "フォルダ",
+    })
+    assert r.status_code == 403
+
+
+# ---- 課題④b: アップロード API -----------------------------------------
+
+@pytest.fixture
+def upload_client(tmp_path: Path):
+    case_dir = tmp_path / "upload_case"
+    case_dir.mkdir()
+    server.CONFIG = {
+        "cases": {
+            "uc": {"id": "uc", "name": "アップロードテスト事件",
+                   "path": case_dir, "reindex": False, "upload_subdir": ""}
+        },
+        "display_names": {},
+    }
+    server._listing_cache.clear()
+    return TestClient(server.app, base_url="http://127.0.0.1:8788"), case_dir
+
+
+def test_upload_ok(upload_client):
+    client, case_dir = upload_client
+    pdf_data = b"%PDF-1.4\n" + b"x" * 512
+    r = client.post("/api/cases/uc/upload", headers=CSRF,
+                    files={"file": ("テスト書面.pdf", pdf_data, "application/pdf")})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["ok"] is True
+    assert (case_dir / "テスト書面.pdf").exists()
+    import json as _json
+    log = _json.loads((case_dir / "_index" / "import_log.json").read_text(encoding="utf-8"))
+    assert len(log) == 1
+    assert log[0]["file_name"] == "テスト書面.pdf"
+
+
+def test_upload_requires_csrf(upload_client):
+    client, _ = upload_client
+    r = client.post("/api/cases/uc/upload",
+                    files={"file": ("a.pdf", b"%PDF", "application/pdf")})
+    assert r.status_code == 403
+
+
+def test_upload_extension_rejected(upload_client):
+    client, _ = upload_client
+    r = client.post("/api/cases/uc/upload", headers=CSRF,
+                    files={"file": ("malware.exe", b"MZ", "application/octet-stream")})
+    assert r.status_code == 400
+
+
+def test_upload_sha_duplicate_rejected(upload_client):
+    client, case_dir = upload_client
+    pdf_data = b"%PDF-1.4\n" + b"z" * 256
+    r1 = client.post("/api/cases/uc/upload", headers=CSRF,
+                     files={"file": ("書面.pdf", pdf_data, "application/pdf")})
+    assert r1.status_code == 200
+    server._listing_cache.clear()
+    # 同一内容を別名でアップロード → sha 重複で拒否
+    r2 = client.post("/api/cases/uc/upload", headers=CSRF,
+                     files={"file": ("別名書面.pdf", pdf_data, "application/pdf")})
+    assert r2.status_code == 409
+    assert "既に登録済み" in r2.json()["detail"]
+
+
+def test_upload_same_name_different_content_409(upload_client):
+    client, case_dir = upload_client
+    r1 = client.post("/api/cases/uc/upload", headers=CSRF,
+                     files={"file": ("同名書面.pdf", b"%PDF-1.4\n" + b"A" * 256, "application/pdf")})
+    assert r1.status_code == 200
+    server._listing_cache.clear()
+    # 同名・別内容 → 409
+    r2 = client.post("/api/cases/uc/upload", headers=CSRF,
+                     files={"file": ("同名書面.pdf", b"%PDF-1.4\n" + b"B" * 256, "application/pdf")})
+    assert r2.status_code == 409
+    assert "同名の別内容" in r2.json()["detail"]
+
+
+def test_upload_index_dir_blocked(upload_client, tmp_path):
+    """保存先が _index 配下の場合は 403 であること。"""
+    client, case_dir = upload_client
+    # upload_subdir を _index にする
+    server.CONFIG["cases"]["uc"]["upload_subdir"] = "_index"
+    server._listing_cache.clear()
+    r = client.post("/api/cases/uc/upload", headers=CSRF,
+                    files={"file": ("x.pdf", b"%PDF", "application/pdf")})
+    # _index フォルダは禁止 → 400 or 403
+    assert r.status_code in (400, 403)
+    server.CONFIG["cases"]["uc"]["upload_subdir"] = ""
+
+
+def test_upload_cache_invalidated(upload_client):
+    """アップロード後にキャッシュが無効化され、新ファイルが一覧に現れること。"""
+    client, _ = upload_client
+    before = client.get("/api/cases/uc/documents").json()["documents"]
+    r = client.post("/api/cases/uc/upload", headers=CSRF,
+                    files={"file": ("新書面.pdf", b"%PDF-1.4\n" + b"N" * 128, "application/pdf")})
+    assert r.status_code == 200
+    after = client.get("/api/cases/uc/documents").json()["documents"]
+    names = [d["file_name"] for d in after]
+    assert "新書面.pdf" in names

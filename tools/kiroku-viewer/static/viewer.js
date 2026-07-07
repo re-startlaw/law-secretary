@@ -47,9 +47,9 @@ export function mountInlineViewer(doc, container, ctx) {
     open.onclick = () => openExternal(ctx.caseId, doc.sha256);
     body.appendChild(open);
     root.appendChild(body);
-    return;
+    return null;
   }
-  new ViewerInstance(doc, root, ctx);
+  return new ViewerInstance(doc, root, ctx);
 }
 
 function buildBar(doc, ctx) {
@@ -79,6 +79,10 @@ class ViewerInstance {
     this.root = root;
     this.ctx = ctx;
     this.scale = 1.0;
+    this.fitMode = true;             // true = ウィンドウ幅追従モード
+    this._lastFitWidth = 0;          // 無限ループ防止用の前回フィット幅
+    this._fitDebounceTimer = null;
+    this._resizeObserver = null;
     this.rotation = doc.rotation || 0;     // 保存済み回転状態を復元
     this.choOffset = doc.cho_offset || 0;  // 丁数オフセット
     this.currentPage = 1;
@@ -90,6 +94,7 @@ class ViewerInstance {
     this.textPages = null;
     this.searchHits = [];
     this.searchIdx = -1;
+    this.searchQuery = null;
     this.destroyed = false;
     // 注釈
     this.annoMode = false;
@@ -117,9 +122,11 @@ class ViewerInstance {
     this.txtBtn = sideBtn("TXT", () => this.setMode("txt"));
     this.fileBtn.classList.add("active");
     side.append(this.fileBtn, this.txtBtn);
-    this.annoBtn = sideBtn("注釈モード", () => this.toggleAnnoMode());
-    side.appendChild(this.annoBtn);
-    side.appendChild(sideBtn("書き出し", () => this.exportPdf()));
+    if (!this.ctx.readOnly) {
+      this.annoBtn = sideBtn("注釈モード", () => this.toggleAnnoMode());
+      side.appendChild(this.annoBtn);
+      side.appendChild(sideBtn("書き出し", () => this.exportPdf()));
+    }
     side.appendChild(sideBtn("DL", () => this.download()));
     side.appendChild(sideBtn("↑ 前の文書", () => this.navDoc(-1)));
     side.appendChild(sideBtn("↓ 次の文書", () => this.navDoc(1)));
@@ -129,7 +136,9 @@ class ViewerInstance {
     const right = document.createElement("div");
     right.className = "viewer-right";
     right.appendChild(this.buildToolbar());
-    right.appendChild(this.buildAnnoToolbar());
+    if (!this.ctx.readOnly) {
+      right.appendChild(this.buildAnnoToolbar());
+    }
 
     this.scrollEl = document.createElement("div");
     this.scrollEl.className = "pdf-scroll";
@@ -146,6 +155,23 @@ class ViewerInstance {
 
     this.root.tabIndex = 0;
     this.root.addEventListener("keydown", (e) => this.onKey(e));
+
+    // ResizeObserver でウィンドウ幅追従（課題①）
+    if (typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver(() => {
+        if (!this.fitMode || this.numPages === 0) return;
+        clearTimeout(this._fitDebounceTimer);
+        this._fitDebounceTimer = setTimeout(() => {
+          const avail = this.scrollEl.clientWidth - 32;
+          if (Math.abs(avail - this._lastFitWidth) <= 2) return; // 2px以下の変化は無視
+          this._lastFitWidth = avail;
+          this.fitWidth(true);  // silent=true: reflow なし
+          this.reflow();
+          this.jumpTo(this.currentPage);
+        }, 200);
+      });
+      this._resizeObserver.observe(this.scrollEl);
+    }
   }
 
   buildToolbar() {
@@ -265,8 +291,14 @@ class ViewerInstance {
     this.buildPlaceholders();
     this.updateVisible();
     if (this.ctx.initialPage && this.ctx.initialPage > 1) this.jumpTo(this.ctx.initialPage);
-    if (this.doc.indexed) this.fetchText();
-    this.loadAnnotations();
+    if (this.doc.indexed) this.fetchText().then(() => {
+      // 検索タブから開いた際に初期クエリを適用してハイライト
+      if (this.ctx.initialQuery && this.searchInput) {
+        this.searchInput.value = this.ctx.initialQuery;
+        this.runDocSearch();
+      }
+    });
+    if (!this.ctx.readOnly) this.loadAnnotations();
   }
 
   updatePageTotal() {
@@ -445,6 +477,7 @@ class ViewerInstance {
 
   // ---- ズーム・回転・ジャンプ ----
   setScale(s) {
+    this.fitMode = false;  // 手動ズームで追従モードを解除
     this.scale = Math.max(0.2, Math.min(5, s));
     this.zoomLabel.textContent = Math.round(this.scale * 100) + "%";
     this.reflow();
@@ -455,8 +488,12 @@ class ViewerInstance {
     const rot = this.rotation % 180 !== 0;
     const baseW = rot ? this.defaultBaseH : this.defaultBaseW;
     const s = avail > 0 && baseW ? avail / baseW : 1.0;
-    if (silent) { this.scale = Math.max(0.2, Math.min(5, s)); this.zoomLabel.textContent = Math.round(this.scale * 100) + "%"; }
-    else this.setScale(s);
+    this.fitMode = true;   // 「幅」ボタンで追従モードを復帰
+    this._lastFitWidth = avail;
+    // setScale は fitMode=false にするので直接設定する
+    this.scale = Math.max(0.2, Math.min(5, s));
+    this.zoomLabel.textContent = Math.round(this.scale * 100) + "%";
+    if (!silent) this.reflow();
   }
   rotate() {
     this.rotation = (this.rotation + 90) % 360;
@@ -495,7 +532,13 @@ class ViewerInstance {
     if (!this.textPages) { this.txtEl.innerHTML = '<p class="placeholder">テキスト取得中…</p>'; return; }
     const pg = this.textPages.find((t) => t.page_no === this.currentPage);
     const head = `<div class="txt-head">${this.choLabel(this.currentPage)}</div>`;
-    this.txtEl.innerHTML = head + `<pre class="txt-body">${escapeHtml(pg ? pg.text : "")}</pre>`;
+    let body = escapeHtml(pg ? pg.text : "");
+    // ヒット語ハイライト（検索タブ・文書内検索共用）
+    if (this.searchQuery && pg && pg.text) {
+      const escaped = this.searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      body = body.replace(new RegExp(escaped, "gi"), (m) => `<mark>${m}</mark>`);
+    }
+    this.txtEl.innerHTML = head + `<pre class="txt-body">${body}</pre>`;
   }
   async fetchText() {
     try {
@@ -813,6 +856,8 @@ class ViewerInstance {
   destroy() {
     this.destroyed = true;
     clearTimeout(this.saveTimer);
+    clearTimeout(this._fitDebounceTimer);
+    if (this._resizeObserver) { try { this._resizeObserver.disconnect(); } catch {} this._resizeObserver = null; }
     for (const p of this.pages) if (p.renderTask) { try { p.renderTask.cancel(); } catch {} }
     try { this.loadingTask?.destroy(); } catch {}
   }

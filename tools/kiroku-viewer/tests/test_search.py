@@ -79,3 +79,77 @@ def test_evidence_sort_key_natural_order():
 def test_evidence_sort_fullwidth_equiv():
     # 全角・半角の番号が同じ順序キーに揃う
     assert ei.evidence_sort_key("弁１０")[:4] == ei.evidence_sort_key("弁10")[:4]
+
+
+# --- 課題②: 弁護革命IDパーサ -------------------------------------------
+
+REMOVE_CASES = [
+    # 観測7例（除去すべき）
+    ("甲1 被害届.d73ca7qjaj7b", "甲1", "被害届", "", ""),
+    ("乙3 員面調書.6ggnjsv9fvd1", "乙3", "員面調書", "", ""),
+    ("弁1 意見書.20pegmr6ib64", "弁1", "意見書", "", ""),
+    # ID のみのケース（文書名 + 全角@作成者）
+    ("甲5 供述調書＠田中太郎.abc123xyz789", "甲5", "供述調書", "", "田中太郎"),
+    # 半角@
+    ("乙2 証拠.def456uvw012@佐藤花子", "乙2", "証拠", "", "佐藤花子"),
+]
+
+KEEP_CASES = [
+    # 除去してはいけない例
+    ("報告書.最終版", "報告書.最終版"),        # ドット+日本語 → IDではない
+    ("甲1 書面.20240101", "書面"),              # 純数字日付 → IDではない（数字のみ）
+    ("甲2 図面", "図面"),                      # IDなし
+    ("資料", "資料"),                          # IDなし・符号なし
+]
+
+
+def test_bengokakumei_id_remove():
+    """弁護革命IDが正しく除去されること。"""
+    for stem, ev, title, date, author in REMOVE_CASES:
+        e, t, d, a = ei.parse_name_only(stem)
+        assert e == ev, f"stem={stem!r}: evidence_no {e!r} != {ev!r}"
+        assert t == title, f"stem={stem!r}: title {t!r} != {title!r}"
+        if author:
+            assert a == author, f"stem={stem!r}: author {a!r} != {author!r}"
+        # ID パターン（英数字10-16桁）がタイトルに残っていないこと
+        assert not ei.BENGOKAKUMEI_ID_RE.search(t), f"ID残存 stem={stem!r} -> title={t!r}"
+
+
+def test_bengokakumei_id_keep():
+    """除去すべきでないファイル名は改変されないこと。"""
+    for stem, expected_title in KEEP_CASES:
+        _, t, _, _ = ei.parse_name_only(stem)
+        assert t == expected_title, f"stem={stem!r}: title {t!r} != {expected_title!r}"
+
+
+def test_bengokakumei_id_not_empty_after_remove():
+    """ID除去後に空文字になる場合は元のstemを使うこと。"""
+    # IDだけのstem（実用上存在しないがエッジケース）
+    stem_only_id = "a1b2c3d4e5f6"  # 12桁英数混在 → IDパターンにマッチするが先頭ドットがないので除去対象外
+    _, t, _, _ = ei.parse_name_only(stem_only_id)
+    assert t  # タイトルが空にならないこと
+
+
+def test_at_sign_half_and_full():
+    """全角＠・半角@ の両方で作成者分離が働くこと（最後の出現で分割）。"""
+    _, _, _, a_full = ei.parse_name_only("被害届＠山田一郎")
+    assert a_full == "山田一郎"
+
+    _, _, _, a_half = ei.parse_name_only("被害届@山田一郎")
+    assert a_half == "山田一郎"
+
+    # 複数 @ → 最後で分割
+    _, t_multi, _, a_multi = ei.parse_name_only("甲1 A＠B@作成者名")
+    assert a_multi == "作成者名"
+    assert "A＠B" in t_multi
+
+
+def test_id_removal_prevents_date_contamination():
+    """ID除去後に日付抽出が行われるため、IDに含まれる数字列が日付誤抽出されないこと。"""
+    # "20pegmr6ib64" の "20" 部分が日付にならない
+    _, _, doc_date, _ = ei.parse_name_only("弁1 意見書.20pegmr6ib64")
+    assert doc_date == "", f"IDの数字が日付誤抽出された: {doc_date!r}"
+
+    # "6ggnjsv9fvd1" も同様
+    _, _, doc_date2, _ = ei.parse_name_only("乙3 員面調書.6ggnjsv9fvd1")
+    assert doc_date2 == "", f"IDの数字が日付誤抽出された: {doc_date2!r}"
