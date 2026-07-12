@@ -1597,29 +1597,29 @@ def set_done_checkbox(sheets_service, row_number, value=True):
     ).execute()
 
 
-def highlight_freee_cell(sheets_service, row_number):
-    """G列（freee）セルの背景を黄色にする（チェックは入れない）。"""
-    sheets_service.spreadsheets().batchUpdate(
+FREEE_PENDING_NOTE = "freee登録済・仕訳待ち"
+
+
+def mark_freee_pending(sheets_service, row_number, current_note=""):
+    """L列（対応事項）にfreee仕訳待ちマーカーを書く。
+
+    G列セルの背景を直接塗る方式は、行追記（INSERT_ROWS／GASのappendRow）が
+    直前行の書式を継承するため無関係な行まで黄色になる。黄色表示は
+    「L列に本マーカー かつ G列未チェック」の条件付き書式
+    （scripts/fix_g_highlight_20260712.py で設定）に任せる。
+    """
+    current_note = current_note or ""
+    if FREEE_PENDING_NOTE in current_note:
+        return
+    new_note = (
+        f"{current_note} / {FREEE_PENDING_NOTE}" if current_note
+        else FREEE_PENDING_NOTE
+    )
+    sheets_service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
-        body={"requests": [{
-            "repeatCell": {
-                "range": {
-                    "sheetId": SHEET_GID,
-                    "startRowIndex": row_number - 1,
-                    "endRowIndex": row_number,
-                    "startColumnIndex": 6,
-                    "endColumnIndex": 7,
-                },
-                "cell": {
-                    "userEnteredFormat": {
-                        "backgroundColor": {
-                            "red": 1.0, "green": 1.0, "blue": 0.0, "alpha": 1.0,
-                        }
-                    }
-                },
-                "fields": "userEnteredFormat.backgroundColor",
-            }
-        }]},
+        range=f"{SHEET_NAME}!L{row_number}",
+        valueInputOption="USER_ENTERED",
+        body={"values": [[new_note]]},
     ).execute()
 
 
@@ -2676,16 +2676,20 @@ def main():
     except Exception as e:
         logging.warning(f"確認待ち集計に失敗: {e}")
 
-    # freeeアップロード成功行のG列を黄色ハイライト
+    # freeeアップロード成功行にL列マーカーを付与（条件付き書式がG列を黄色表示）
     if freee_uploaded_names and latest_sheet:
         latest_index = build_filename_index(latest_sheet)
         for fname in freee_uploaded_names:
             row_info = latest_index.get(_nfc(fname))
             if row_info:
                 try:
-                    highlight_freee_cell(sheets_service, row_info["row"])
+                    row_vals = latest_sheet[row_info["row"] - 1]
+                    current_note = row_vals[11] if len(row_vals) > 11 else ""
+                    mark_freee_pending(
+                        sheets_service, row_info["row"], current_note
+                    )
                 except Exception as e:
-                    logging.warning(f"G列ハイライト失敗: {fname} row={row_info['row']}: {e}")
+                    logging.warning(f"freee仕訳待ちマーカー失敗: {fname} row={row_info['row']}: {e}")
 
     # Phase 3: 学習提案・精度統計
     learning_proposals = []
